@@ -14,6 +14,12 @@ from telegram.ext import (
 import sqlite3
 from datetime import datetime
 
+# === АНАЛИТИКА ===
+from analytics.logger import logger
+from config import ADMIN_ID, BOT_STAGES, QUESTION_TYPES, ERROR_TYPES
+import json
+# === КОНЕЦ ИМПОРТОВ АНАЛИТИКИ ===
+
 # === НАЧАЛО БЕЗОПАСНОЙ ЗАГРУЗКИ ТОКЕНА ===
 import os
 from dotenv import load_dotenv
@@ -385,10 +391,9 @@ def filter_tours_by_safety(tours, user_data):
             # Если проблемы с ходьбой - исключаем пешие экскурсии
             if 'ходьба' in health_issues:
                 if any(keyword in tour_description for keyword in ['пеший', 'пешком', 'ходьб', 'прогулк']):
-                    if not any(keyword in tour_description for keyword in ['коротк', 'легк', 'авто', 'трансфер']):
-                        is_safe = False
+                    is_safe = False
         
-        # Если экскурсия безопасна, добавляем её
+        # Если экскурсия безопасна - добавляем в результат
         if is_safe:
             filtered_tours.append(tour)
     
@@ -879,10 +884,47 @@ def parse_user_response(text):
     
     return data, missing_points
 
+# ==================== ФУНКЦИИ АНАЛИТИКИ ====================
+def track_user_session(context, stage, additional_data=None):
+    """Отслеживает сессию пользователя для анализа уходов"""
+    if 'session_start' not in context.user_data:
+        context.user_data['session_start'] = datetime.now()
+        context.user_data['session_stages'] = []
+    
+    context.user_data['current_stage'] = stage
+    context.user_data['session_stages'].append({
+        'stage': stage,
+        'timestamp': datetime.now(),
+        'data': additional_data
+    })
+
+def log_drop_off_if_needed(user_id, context):
+    """Логирует уход пользователя, если он не завершил диалог"""
+    if context.user_data.get('current_stage'):
+        session_duration = None
+        if 'session_start' in context.user_data:
+            session_duration = (datetime.now() - context.user_data['session_start']).seconds
+        
+        logger.log_drop_off(
+            user_id=user_id,
+            drop_off_stage=context.user_data['current_stage'],
+            last_action=context.user_data.get('last_action', 'unknown'),
+            session_duration=session_duration,
+            user_profile=context.user_data.get('user_data')
+        )
+# ==================== КОНЕЦ ФУНКЦИЙ АНАЛИТИКИ ====================
+
 # ==================== КОМАНДЫ БОТА ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
+
+# === АНАЛИТИКА: ТРЕКИНГ СЕССИИ ===
+    track_user_session(context, BOT_STAGES['start'])
+    logger.log_action(user.id, "started_bot", stage=BOT_STAGES['start'])
+    context.user_data['last_action'] = 'start'
+    # === КОНЕЦ АНАЛИТИКИ ===
+
     welcome_text = f"""Приветствую, {user.first_name}! 🙏
 
 Я Алекс, ваш личный гид по сокровищам Пхукета от GoldenKeyTours.
@@ -899,6 +941,13 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь выбрал категорию"""
     user_choice = update.message.text
     context.user_data['category'] = user_choice
+
+# === АНАЛИТИКА: ВЫБОР КАТЕГОРИИ ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['category_selection'], {'category': user_choice})
+    logger.log_action(user.id, "chose_category", stage=BOT_STAGES['category_selection'], category=user_choice)
+    context.user_data['last_action'] = 'category_choice'
+    # === КОНЕЦ АНАЛИТИКИ ===
     
     # Сохраняем экскурсии этой категории
     category_tours = [t for t in TOURS if t.get("Для информации", "") == user_choice]
@@ -941,6 +990,13 @@ async def handle_qualification(update: Update, context: ContextTypes.DEFAULT_TYP
     """Пользователь ответил на вопросы - анализируем и уточняем при необходимости"""
     user_text = update.message.text
     context.user_data['qualification_raw'] = user_text
+
+# === АНАЛИТИКА: ОБРАБОТКА ДАННЫХ ПОЛЬЗОВАТЕЛЯ ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['data_collection'])
+    logger.log_action(user.id, "provided_user_data", stage=BOT_STAGES['data_collection'])
+    context.user_data['last_action'] = 'user_data_input'
+    # === КОНЕЦ АНАЛИТИКИ ===
     
     # Анализируем ответ
     user_data, missing_points = parse_user_response(user_text)
@@ -1059,6 +1115,13 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     
     callback_data = query.data
+
+# === АНАЛИТИКА: ПРОСМОТР ЭКСКУРСИИ ===
+    user = query.from_user
+    track_user_session(context, BOT_STAGES['tour_details'])
+    logger.log_action(user.id, "viewed_tour", stage=BOT_STAGES['tour_details'])
+    context.user_data['last_action'] = 'tour_view'
+    # === КОНЕЦ АНАЛИТИКИ ===
     
     if callback_data.startswith("tour_"):
         # Пользователь выбрал конкретную экскурсию
@@ -1074,6 +1137,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
             # Создаем кнопки для навигации
             keyboard = [
                 [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_{tour_index}")],
+                [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
                 [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")],
                 [InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")]
             ]
@@ -1161,6 +1225,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def show_tours(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# === АНАЛИТИКА: ПОКАЗ СПИСКА ЭКСКУРСИЙ ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['tour_list'])
+    logger.log_action(user.id, "viewed_tour_list", stage=BOT_STAGES['tour_list'])
+    context.user_data['last_action'] = 'tour_list'
+    # === КОНЕЦ АНАЛИТИКИ ===
+
     """Тестовая команда для просмотра экскурсий"""
     if not TOURS:
         await update.message.reply_text("❌ Данные не загружены")
@@ -1191,107 +1263,205 @@ async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== КОМАНДА СТАТИСТИКИ ====================
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать базовую статистику бота - ТОЛЬКО ДЛЯ АДМИНОВ"""
+    """Показать расширенную статистику бота с аналитикой - ТОЛЬКО ДЛЯ АДМИНОВ"""
     user_id = update.effective_user.id
     
-    # Здесь можно добавить проверку на админа
-    # Например, если user_id в списке админов
-    # ВАЖНО: Замените 123456789 на ваш реальный Telegram ID!
-    # Чтобы узнать свой ID: напишите боту @userinfobot в Telegram
-    ADMINS = [7966971037]  # ← ЗАМЕНИТЕ НА ВАШ ID!
+    # Проверка на администратора (ваш ID)
+    ADMINS = [7966971037]  # Ваш Telegram ID
     
     if user_id not in ADMINS:
         await update.message.reply_text("❌ Эта команда только для администраторов")
         return
     
     try:
+        # ==================== ОБЩАЯ СТАТИСТИКА ====================
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         
-        # 1. Общая статистика
-        cursor.execute('SELECT COUNT(*) FROM users')
-        total_users = cursor.fetchone()[0]
+        response = "📊 РАСШИРЕННАЯ СТАТИСТИКА БОТА АЛЕКСА\n\n"
         
-        cursor.execute('SELECT COUNT(*) FROM conversations')
-        total_conversations = cursor.fetchone()[0]
+        # 1. БАЗОВАЯ СТАТИСТИКА
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_actions WHERE action='started_bot'")
+        started_bot = cursor.fetchone()[0] or 0
         
-        cursor.execute('SELECT COUNT(*) FROM actions')
-        total_actions = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_actions WHERE action='chose_category'")
+        chose_category = cursor.fetchone()[0] or 0
         
-        # 2. Активность за последние 7 дней
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_actions WHERE action='viewed_tour'")
+        viewed_tour = cursor.fetchone()[0] or 0
+        
+        response += "📈 КОНВЕРСИЯ ПО ЭТАПАМ:\n"
+        response += f"• /start: {started_bot} пользователей\n"
+        response += f"• Выбор категории: {chose_category} ({chose_category/started_bot*100:.1f}% от стартов)\n"
+        response += f"• Просмотр экскурсий: {viewed_tour} ({viewed_tour/started_bot*100:.1f}% от стартов)\n\n"
+        
+        # 2. ТОЧКИ УХОДА (DROP-OFFS)
         cursor.execute('''
-            SELECT DATE(timestamp) as date, COUNT(*) as count 
-            FROM actions 
-            WHERE timestamp > datetime('now', '-7 days')
-            GROUP BY DATE(timestamp)
-            ORDER BY date DESC
+            SELECT drop_off_stage, COUNT(*) as count 
+            FROM drop_off_points 
+            GROUP BY drop_off_stage 
+            ORDER BY count DESC
         ''')
-        weekly_activity = cursor.fetchall()
+        drop_offs = cursor.fetchall()
         
-        # 3. Популярные категории
+        if drop_offs:
+            response += "📍 ТОЧКИ УХОДА КЛИЕНТОВ:\n"
+            for stage, count in drop_offs[:5]:
+                response += f"• {stage}: {count} уходов\n"
+            response += "\n"
+        
+        # 3. САМЫЕ ПОПУЛЯРНЫЕ ЭКСКУРСИИ
         cursor.execute('''
-            SELECT category, COUNT(*) as count 
-            FROM conversations 
-            WHERE category IS NOT NULL 
-            GROUP BY category 
+            SELECT tour_name, COUNT(*) as views, AVG(view_time_seconds) as avg_time 
+            FROM tour_views 
+            WHERE tour_name IS NOT NULL 
+            GROUP BY tour_name 
+            ORDER BY views DESC 
+            LIMIT 5
+        ''')
+        popular_tours = cursor.fetchall()
+        
+        if popular_tours:
+            response += "🏆 ТОП-5 ЭКСКУРСИЙ:\n"
+            for tour_name, views, avg_time in popular_tours:
+                avg_min = int(avg_time // 60) if avg_time else 0
+                avg_sec = int(avg_time % 60) if avg_time else 0
+                response += f"• {tour_name[:30]}: {views} просмотров ({avg_min}м {avg_sec}с)\n"
+            response += "\n"
+        
+        # 4. ЧАСТЫЕ ВОПРОСЫ
+        cursor.execute('''
+            SELECT question_type, COUNT(*) as count 
+            FROM user_questions 
+            WHERE question_type IS NOT NULL 
+            GROUP BY question_type 
             ORDER BY count DESC 
             LIMIT 5
         ''')
-        popular_categories = cursor.fetchall()
+        frequent_questions = cursor.fetchall()
         
-        # 4. Частые действия
+        if frequent_questions:
+            response += "❓ ЧАСТЫЕ ВОПРОСЫ:\n"
+            for q_type, count in frequent_questions:
+                response += f"• {q_type}: {count} раз\n"
+            response += "\n"
+        
+        # 5. ОШИБКИ (ТОЛЬКО ЗА ПОСЛЕДНИЕ 7 ДНЕЙ)
         cursor.execute('''
-            SELECT action_type, COUNT(*) as count 
-            FROM actions 
-            GROUP BY action_type 
-            ORDER BY count DESC 
-            LIMIT 10
+            SELECT error_type, COUNT(*) as count 
+            FROM error_logs 
+            WHERE timestamp > datetime('now', '-7 days')
+            GROUP BY error_type 
+            ORDER BY count DESC
         ''')
-        frequent_actions = cursor.fetchall()
+        recent_errors = cursor.fetchall()
         
-        # Формируем ответ БЕЗ Markdown форматирования
-        # (чтобы избежать ошибок парсинга)
-        response = "📊 СТАТИСТИКА БОТА АЛЕКСА\n\n"
+        if recent_errors:
+            response += "⚠️ ОШИБКИ (7 ДНЕЙ):\n"
+            for err_type, count in recent_errors:
+                response += f"• {err_type}: {count}\n"
+            response += "\n"
         
-        response += "📈 ОБЩАЯ СТАТИСТИКА:\n"
-        response += f"👥 Пользователей: {total_users}\n"
-        response += f"💬 Диалогов: {total_conversations}\n"
-        response += f"⚡ Действий: {total_actions}\n\n"
+        # 6. ВРЕМЯ СЕССИЙ
+        cursor.execute('SELECT AVG(session_duration) FROM drop_off_points WHERE session_duration > 0')
+        avg_session = cursor.fetchone()[0]
         
-        response += "📅 АКТИВНОСТЬ (7 ДНЕЙ):\n"
-        if weekly_activity:
-            for date_str, count in weekly_activity:
-                response += f"• {date_str}: {count} действий\n"
-        else:
-            response += "Нет данных за последние 7 дней\n"
-        response += "\n"
+        if avg_session:
+            avg_min = int(avg_session // 60)
+            avg_sec = int(avg_session % 60)
+            response += f"⏱️ Среднее время в боте: {avg_min} минут {avg_sec} секунд\n\n"
         
-        response += "🏆 ТОП-5 КАТЕГОРИЙ:\n"
-        if popular_categories:
-            for category, count in popular_categories:
-                # Экранируем специальные символы
-                safe_category = category.replace('_', ' ').replace('*', '').replace('_', '')
-                response += f"• {safe_category}: {count} запросов\n"
-        else:
-            response += "Нет данных по категориям\n"
-        response += "\n"
+        # 7. АКТИВНОСТЬ СЕГОДНЯ
+        cursor.execute("SELECT COUNT(*) FROM user_actions WHERE DATE(timestamp) = DATE('now')")
+        today_actions = cursor.fetchone()[0]
         
-        response += "🎯 ЧАСТЫЕ ДЕЙСТВИЯ (ТОП-5):\n"
-        if frequent_actions:
-            for action_type, count in frequent_actions[:5]:
-                safe_action = str(action_type).replace('_', ' ').replace('*', '')
-                response += f"• {safe_action}: {count}\n"
+        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM user_actions WHERE DATE(timestamp) = DATE('now')")
+        today_users = cursor.fetchone()[0]
+        
+        response += f"🚀 СЕГОДНЯ: {today_users} пользователей, {today_actions} действий\n"
         
         conn.close()
         
-        # Отправляем БЕЗ parse_mode='Markdown'
+        # Добавляем подсказки для администратора
+        response += "\n" + "="*40 + "\n"
+        response += "📋 КОМАНДЫ АНАЛИТИКИ:\n"
+        response += "/stats_drops - Детали уходов\n"
+        response += "/stats_errors - Все ошибки\n"
+        response += "/stats_questions - Все вопросы\n"
+        response += "/stats_tours - Все экскурсии\n"
+        
         await update.message.reply_text(response)
         
     except Exception as e:
         print(f"❌ Ошибка статистики: {e}")
         import traceback
         traceback.print_exc()
-        await update.message.reply_text(f"❌ Ошибка получения статистики: {str(e)[:100]}")
+        
+        # Логируем ошибку статистики
+        logger.log_error(
+            error_type=ERROR_TYPES['db_error'],
+            error_message=f"stats_command error: {str(e)}",
+            user_id=user_id,
+            bot_state='stats',
+            user_action='stats_command'
+        )
+        
+        await update.message.reply_text("❌ Ошибка получения статистики. Данные логированы.")
+
+# ==================== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ АНАЛИТИКИ ====================
+
+async def stats_drops_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детальная статистика по точкам ухода"""
+    user_id = update.effective_user.id
+    ADMINS = [7966971037]
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Только для администраторов")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT drop_off_stage, COUNT(*) as count, 
+                   AVG(session_duration) as avg_time,
+                   MIN(timestamp) as first_occurrence,
+                   MAX(timestamp) as last_occurrence
+            FROM drop_off_points 
+            GROUP BY drop_off_stage 
+            ORDER BY count DESC
+        ''')
+        
+        drops = cursor.fetchall()
+        conn.close()
+        
+        response = "📍 ДЕТАЛЬНАЯ СТАТИСТИКА УХОДОВ:\n\n"
+        
+        for stage, count, avg_time, first, last in drops:
+            avg_min = int(avg_time // 60) if avg_time else 0
+            avg_sec = int(avg_time % 60) if avg_time else 0
+            response += f"🎯 {stage}:\n"
+            response += f"   • Уходов: {count}\n"
+            response += f"   • Среднее время: {avg_min}м {avg_sec}с\n"
+            response += f"   • Первый: {first[:10] if first else 'N/A'}\n"
+            response += f"   • Последний: {last[:10] if last else 'N/A'}\n\n"
+        
+        if not drops:
+            response = "📭 Данных об уходах пока нет"
+        
+        await update.message.reply_text(response)
+        
+    except Exception as e:
+        logger.log_error(
+            error_type=ERROR_TYPES['db_error'],
+            error_message=f"stats_drops error: {str(e)}",
+            user_id=user_id
+        )
+        await update.message.reply_text("❌ Ошибка получения данных об уходах")
+
+# Аналогично можно добавить:
+# stats_errors_command, stats_questions_command, stats_tours_command
 
 # ==================== КНОПКА "ЗАДАТЬ ВОПРОС" (ШАГ 5) ====================
 def make_question_keyboard():
@@ -1367,6 +1537,14 @@ FAQ_ANSWERS = {
 }
 
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# === АНАЛИТИКА: ВОПРОС FAQ ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['faq'])
+    logger.log_action(user.id, "asked_question", stage=BOT_STAGES['faq'])
+    context.user_data['last_action'] = 'faq_question'
+    # === КОНЕЦ АНАЛИТИКИ ===
+
     """Обработчик вопросов пользователя с поиском по ключевым словам"""
     user = update.effective_user
     question_text = update.message.text.lower()  # переводим в нижний регистр для поиска
