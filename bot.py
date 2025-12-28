@@ -1540,6 +1540,8 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
         )
         
         return TOUR_DETAILS
+    
+    elif user_choice == "🔄 Подобрать из рекомендованных":
         # Показываем экскурсии из рекомендованных категорий (суша и шоу)
         user_data = context.user_data.get('user_data', {})
         
