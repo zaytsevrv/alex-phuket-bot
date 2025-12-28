@@ -1291,11 +1291,14 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_choice = update.message.text
     user = update.effective_user
     
-    # Добавляем реакцию "читаю сообщение"
+    # === ЭФФЕКТ САЛЮТА И ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
     try:
+        # 1. Салют (эффект доставки)
+        await update.message.set_reaction(emoji="🎉")
+        await asyncio.sleep(1)
+        
+        # 2. Глаза (бот читает сообщение)
         await update.message.set_reaction(emoji="👀")
-        await asyncio.sleep(2)  # Показываем 2 секунды
-        await update.message.set_reaction(emoji=None)  # Убираем реакцию
     except Exception as e:
         print(f"⚠️ Не удалось установить реакцию: {e}")
     
@@ -1311,6 +1314,12 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Показываем typing indicator - бот "думает"
             await update.effective_chat.send_chat_action(ChatAction.TYPING)
             await asyncio.sleep(1)
+            
+            # Убираем глаза перед ответом
+            try:
+                await update.message.set_reaction(emoji=None)
+            except:
+                pass
             
             # Подготавливаем контекст для DeepSeek
             context_info = "Пользователь еще не выбрал категорию, задает вопрос о Пхукете"
@@ -2520,6 +2529,17 @@ FAQ_ANSWERS = {
 
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+# === ЭФФЕКТ САЛЮТА И ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
+    try:
+        # 1. Салют (эффект доставки)
+        await update.message.set_reaction(emoji="🎉")
+        await asyncio.sleep(1)
+        
+        # 2. Глаза (бот читает сообщение)
+        await update.message.set_reaction(emoji="👀")
+    except Exception as e:
+        print(f"⚠️ Не удалось установить реакцию: {e}")
+
 # === АНАЛИТИКА: ВОПРОС FAQ ===
     user = update.effective_user
     track_user_session(context, BOT_STAGES['faq'])
@@ -2535,6 +2555,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 1. Если нажали "Назад к выбору"
     if "назад к выбору" in question_text.lower():
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
+            
         await update.message.reply_text(
             "Возвращаюсь к выбору экскурсий...",
             reply_markup=ReplyKeyboardRemove()
@@ -2552,6 +2578,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 2. Если нажали на кнопку из FAQ
     elif question_text in [q.lower() for q in FAQ_ANSWERS.keys()]:
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
+            
         # Находим оригинальный ключ (с заглавными буквами и эмодзи)
         for key in FAQ_ANSWERS.keys():
             if key.lower() == question_text:
@@ -2565,6 +2597,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 3. ПОИСК ПО КЛЮЧЕВЫМ СЛОВАМ
     elif any(word in question_text for word in ['заболе', 'температур', 'плохо себя чувств', 'просту', 'болен', 'грипп', 'орви']):
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
+            
         await update.message.reply_text(
             answer,
             parse_mode='Markdown',
@@ -2573,6 +2611,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QUESTION
     
     elif any(word in question_text for word in ['вернут', 'отмен', 'передума', 'не поеду', 'возврат деньг', 'верните', 'отказаться', 'передумываю']):
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
+            
         await update.message.reply_text(
             answer,
             parse_mode='Markdown',
@@ -2581,6 +2625,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QUESTION
     
     elif any(word in question_text for word in ['шторм', 'погод', 'дожд', 'отменят', 'ливень', 'ураган', 'тайфун', 'непогода']):
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
+            
         await update.message.reply_text(
             answer,
             parse_mode='Markdown',
@@ -2589,6 +2639,11 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QUESTION
     
     elif any(word in question_text for word in ['доплат', 'трансфер дорог', 'дорого трансфер', 'оплата трансфер']):
+        # Убираем глаза перед ответом
+        try:
+            await update.message.set_reaction(emoji=None)
+        except:
+            pass
         await update.message.reply_text(
             answer,
             parse_mode='Markdown',
