@@ -78,9 +78,9 @@ def parse_user_response(text):
     # ========== 1. СЛОВАРЬ ДЛЯ ПОИСКА ЧИСЛИТЕЛЬНЫХ ==========
     number_words = {
         'один': 1, 'одного': 1, 'одной': 1,
-        'два': 2, 'двое': 2, 'двух': 2,
-        'три': 3, 'трое': 3, 'трёх': 3, 'трех': 3,
-        'четыре': 4, 'четверо': 4, 'четырех': 4, 'четырёх': 4,
+        'два': 2, 'двое': 2, 'двух': 2, 'вдвоем': 2,
+        'три': 3, 'трое': 3, 'трёх': 3, 'трех': 3, 'втроем': 3,
+        'четыре': 4, 'четверо': 4, 'четырех': 4, 'четырёх': 4, 'вчетвером': 4,
         'пять': 5, 'пятеро': 5,
         'шесть': 6, 'шестеро': 6,
         'семь': 7, 'семеро': 7,
@@ -89,7 +89,30 @@ def parse_user_response(text):
         'десять': 10
     }
 
-    # ========== 2. НАХОДИМ ВСЕ ЧИСЛА И ЧИСЛИТЕЛЬНЫЕ В ТЕКСТЕ (СТРОГО) ==========
+    # ========== СПЕЦИАЛЬНАЯ ОБРАБОТКА ВЗРОСЛЫХ ==========
+    # Обрабатываем случаи типа "я одна", "я с мужем", "мы вдвоем"
+    
+    # Ищем паттерн "я одна/один"
+    if 'я одна' in text_lower or 'я один' in text_lower:
+        data['adults'] = 1
+    
+    # Ищем паттерн "я с [кем-то]"
+    ya_s_match = re.search(r'я\s+с\s+(\w+)', text_lower)
+    if ya_s_match:
+        partner = ya_s_match.group(1)
+        if partner in ['муж', 'мужем', 'жен', 'женой', 'партнёр', 'партнер', 'друг', 'подруг']:
+            data['adults'] = 2
+    
+    # Ищем "мы вдвоем", "мы втроем" и т.д.
+    my_v_match = re.search(r'мы\s+(в\d+ем)', text_lower)
+    if my_v_match:
+        v_word = my_v_match.group(1)
+        if v_word == 'вдвоем':
+            data['adults'] = 2
+        elif v_word == 'втроем':
+            data['adults'] = 3
+        elif v_word == 'вчетвером':
+            data['adults'] = 4
     all_numbers = []
 
     # 2A. Ищем цифры (учтём пунктуацию) - используем lookahead
@@ -105,7 +128,7 @@ def parse_user_response(text):
     # Сортируем по позиции
     all_numbers.sort(key=lambda x: x['pos'])
 
-    # Токенизируем текст (только слова и цифры) с позициями
+    # Токенизируем текст (слова и числа с учётом пунктуации)
     tokens = []
     for m in re.finditer(r'\b\w+\b', text_lower):
         tokens.append({'text': m.group(0), 'start': m.start(), 'end': m.end()})
@@ -124,9 +147,13 @@ def parse_user_response(text):
                 best_dist = dist
         return best
 
+    processed_positions = set()  # позиции уже обработанных чисел
     current_child_count = 1  # текущий счетчик количества детей для следующих возрастов
 
     for num_info in all_numbers:
+        if num_info['pos'] in processed_positions:
+            continue  # уже обработано в комбинированном паттерне
+            
         num = num_info['value']
         pos = num_info['pos']
         t_idx = _find_token_index_for_pos(pos)
@@ -138,17 +165,43 @@ def parse_user_response(text):
         if any(k in left_context or k in right_context for k in ['взросл', 'взр']):
             if data['adults'] == 0:
                 data['adults'] = num
+            processed_positions.add(pos)
             continue
         
         # Проверяем паттерны "нас/мы + число" для взрослых
         if left_context in ['нас', 'мы'] and right_context not in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']:
             if data['adults'] == 0:
                 data['adults'] = num
+            processed_positions.add(pos)
             continue
+        
+        # Проверяем паттерны типа "я с мужем" (2 взрослых), "я одна" (1 взрослый)
+        if left_context == 'я':
+            if right_context in ['одна', 'один']:
+                data['adults'] = 1
+                processed_positions.add(pos)
+                continue
+            elif right_context in ['с', 'и']:
+                # Смотрим дальше: "я с мужем" = 2, "я и муж" = 2
+                next_right = tokens[t_idx+2]['text'] if t_idx is not None and t_idx+2 < len(tokens) else ''
+                if next_right in ['муж', 'мужем', 'жен', 'женой', 'партнёр', 'партнер', 'друг', 'подруг']:
+                    data['adults'] = 2
+                    processed_positions.add(pos)
+                    continue
+        
+        # Проверяем "вдвоем", "втроем" и т.д.
+        if num_info['type'] == 'word' and num_info['word'] in ['вдвоем', 'втроем', 'вчетвером']:
+            # Ищем контекст
+            context_window = ' '.join(t['text'] for t in tokens[max(0, t_idx-3):min(len(tokens), t_idx+4)])
+            if 'ребен' not in context_window and 'дет' not in context_window:
+                data['adults'] = num
+                processed_positions.add(pos)
+                continue
         
         # Если число явно указывает количество детей (перед "дети", "ребенок")
         if right_context in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']:
             current_child_count = num
+            processed_positions.add(pos)
             continue  # не обрабатывать как возраст
 
         # Если рядом слова ребенок/дети или рядом слова года/лет/месяц - это возраст
@@ -167,20 +220,7 @@ def parse_user_response(text):
                 months = int(age_match.group(2)) if age_match.group(2) else 0
                 total_months = years * 12 + months
                 
-                # Проверяем, есть ли указание количества детей перед этим
-                child_count = 1  # по умолчанию 1 ребенок
-                for prev_num in all_numbers:
-                    if prev_num['pos'] < pos and prev_num['value'] <= 10:  # число перед текущим
-                        prev_t_idx = _find_token_index_for_pos(prev_num['pos'])
-                        if prev_t_idx is not None:
-                            prev_start = max(0, prev_t_idx - 2)
-                            prev_end = min(len(tokens), prev_t_idx + 3)
-                            prev_context = ' '.join(t['text'] for t in tokens[prev_start:prev_end])
-                            if any(k in prev_context for k in ['ребен', 'дет', 'детей']) and not any(k in prev_context for k in ['взросл', 'взр']):
-                                child_count = prev_num['value']
-                                break
-                
-                # Добавляем соответствующее количество детей с этим возрастом
+                # Добавляем детей с этим возрастом (используем current_child_count)
                 for _ in range(current_child_count):
                     data['children'].append(total_months)
                     # Формируем человекочитаемый текст
@@ -188,7 +228,14 @@ def parse_user_response(text):
                         data['children_original'].append(f"{years} {_russian_year_label(years)}")
                     else:
                         data['children_original'].append(f"{years} {_russian_year_label(years)} и {months} {_russian_month_label(months)}")
-                current_child_count = 1  # сбрасываем
+                current_child_count = 1  # сбрасываем после использования
+                
+                # Помечаем все числа в диапазоне контекста как обработанные
+                context_start_pos = tokens[start]['start']
+                context_end_pos = tokens[end-1]['end']
+                for num_info_check in all_numbers:
+                    if context_start_pos <= num_info_check['pos'] < context_end_pos:
+                        processed_positions.add(num_info_check['pos'])
                 continue
 
             # Если указано в годах
@@ -199,6 +246,7 @@ def parse_user_response(text):
                         data['children'].append(months)
                         data['children_original'].append(f"{num} {_russian_year_label(num)}")
                     current_child_count = 1
+                processed_positions.add(pos)
                 continue
 
             # Если указано в месяцах
@@ -209,6 +257,7 @@ def parse_user_response(text):
                         data['children'].append(months)
                         data['children_original'].append(f"{months} {_russian_month_label(months)}")
                     current_child_count = 1
+                processed_positions.add(pos)
                 continue
 
             # Если рядом слово 'ребен'/'дет' и нет единиц измерения — это количество детей (маркер)
@@ -216,6 +265,7 @@ def parse_user_response(text):
                 # добавляем маркер 0 (возраст не указан)
                 data['children'].append(0)
                 data['children_original'].append('количество')
+                processed_positions.add(pos)
                 continue
 
     # ========== 5. ПОИСК БЕРЕМЕННОСТИ, ПРИОРИТЕТОВ И ЗДОРОВЬЯ ==========
