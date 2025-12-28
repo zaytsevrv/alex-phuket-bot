@@ -30,16 +30,41 @@ def age_to_months(age_str):
     return 0
 
 def format_age_months(months):
-    """Форматирует возраст в месяцах в читаемый вид"""
+    """Форматирует возраст в месяцах в читаемый вид в годах с округлением в меньшую сторону"""
     if months < 12:
-        return f"{months} мес."
+        return "менее 1 года"
     else:
-        years = months // 12
-        rem_months = months % 12
-        if rem_months == 0:
-            return f"{years} лет"
-        else:
-            return f"{years} лет {rem_months} мес."
+        years = months // 12  # округление в меньшую сторону
+        return f"{years} {_russian_year_label(years)}"
+
+def generate_confirmation_summary(data):
+    """Генерирует сводку для подтверждения пользователем"""
+    lines = []
+    
+    # Взрослые
+    if data['adults'] > 0:
+        lines.append(f"Взрослых: {data['adults']}")
+    
+    # Дети
+    if data['children']:
+        child_ages = []
+        for months in data['children']:
+            age_str = format_age_months(months)
+            child_ages.append(age_str)
+        children_text = f"Дети: {len(data['children'])} ({'; '.join(child_ages)})"
+        lines.append(children_text)
+    else:
+        lines.append("Детей: нет")
+    
+    # Беременность
+    if data['pregnant'] is True:
+        lines.append("Беременность: да")
+    elif data['pregnant'] is False:
+        lines.append("Беременность: нет")
+    else:
+        lines.append("Беременность: не указано")
+    
+    return "\n".join(lines)
 
 def _russian_year_label(n: int) -> str:
     n = abs(int(n))
@@ -107,12 +132,22 @@ def parse_user_response(text):
     my_v_match = re.search(r'мы\s+(в\d+ем)', text_lower)
     if my_v_match:
         v_word = my_v_match.group(1)
+        total_people = 0
         if v_word == 'вдвоем':
-            data['adults'] = 2
+            total_people = 2
         elif v_word == 'втроем':
-            data['adults'] = 3
+            total_people = 3
         elif v_word == 'вчетвером':
-            data['adults'] = 4
+            total_people = 4
+        
+        # Если есть дети, вычитаем их из общего числа
+        if 'ребен' in text_lower or 'дет' in text_lower:
+            child_count = len(data['children']) if data['children'] else 0
+            data['adults'] = max(1, total_people - child_count)
+        else:
+            data['adults'] = total_people
+
+    # ========== 2. СБОР ВСЕХ ЧИСЕЛ ==========
     all_numbers = []
 
     # 2A. Ищем цифры (учтём пунктуацию) - используем lookahead
@@ -148,11 +183,99 @@ def parse_user_response(text):
         return best
 
     processed_positions = set()  # позиции уже обработанных чисел
-    current_child_count = 1  # текущий счетчик количества детей для следующих возрастов
 
+    # ========== 3. ПАРСИНГ ДЕТЕЙ ==========
+    # Сначала ищем количества детей, затем возраста
+    
+    # Ищем паттерны типа "двое детей", "трое детей" и т.д.
+    child_count_patterns = [
+        (r'(\w+)\s+дет', lambda w: number_words.get(w, 0)),  # "двое детей"
+        (r'(\w+)\s+ребен', lambda w: number_words.get(w, 0)), # "двое детей"
+    ]
+    
+    child_counts = []
+    for pattern, converter in child_count_patterns:
+        for m in re.finditer(pattern, text_lower):
+            word = m.group(1)
+            count = converter(word)
+            if count > 0:
+                child_counts.append(count)
+                # Помечаем позицию как обработанную
+                processed_positions.add(m.start())
+    
+    # Если нашли количества детей, используем максимальное
+    if child_counts:
+        expected_children = max(child_counts)
+    else:
+        expected_children = 0
+    
+    # Теперь ищем возраста детей
+    age_patterns = []
+    
+    # Ищем комбинированные возраста типа "7 лет и 10 месяцев" - разделяем на два возраста
+    for m in re.finditer(r'(\d+)\s*(?:лет|год(?:а|ов)?|г\.?)+\s*(?:и\s*)?(\d+)?\s*(?:месяц(?:а|ев)?|мес\.?)+', text_lower):
+        years = int(m.group(1))
+        months = int(m.group(2)) if m.group(2) else 0
+        # Добавляем два отдельных возраста
+        age_patterns.append({
+            'months': years * 12,
+            'text': f"{years} {_russian_year_label(years)}",
+            'pos': m.start()
+        })
+        age_patterns.append({
+            'months': months,
+            'text': f"{months} {_russian_month_label(months)}",
+            'pos': m.start()
+        })
+        processed_positions.add(m.start())
+    
+    # Ищем простые возраста в годах
+    for m in re.finditer(r'(\d+)\s*(?:лет|год(?:а|ов)?|г\.?)', text_lower):
+        if m.start() not in processed_positions:
+            years = int(m.group(1))
+            months = years * 12
+            age_patterns.append({
+                'months': months,
+                'text': f"{years} {_russian_year_label(years)}",
+                'pos': m.start()
+            })
+            processed_positions.add(m.start())
+    
+    # Ищем возраста в месяцах
+    for m in re.finditer(r'(\d+)\s*(?:месяц(?:а|ев)?|мес\.?)', text_lower):
+        if m.start() not in processed_positions:
+            months = int(m.group(1))
+            age_patterns.append({
+                'months': months,
+                'text': f"{months} {_russian_month_label(months)}",
+                'pos': m.start()
+            })
+            processed_positions.add(m.start())
+    
+    # Убираем дубликаты по позиции
+    age_patterns = [age for i, age in enumerate(age_patterns) if not any(a['pos'] == age['pos'] for a in age_patterns[:i])]
+    
+    # Распределяем возраста по детям
+    if age_patterns:
+        if expected_children > len(age_patterns) and expected_children > 0:
+            extended_ages = []
+            for i in range(expected_children):
+                age_idx = i % len(age_patterns)
+                extended_ages.append(age_patterns[age_idx])
+            age_patterns = extended_ages
+        
+        for age in age_patterns[:expected_children if expected_children > 0 else len(age_patterns)]:
+            data['children'].append(age['months'])
+            data['children_original'].append(age['text'])
+    elif expected_children > 0:
+        for _ in range(expected_children):
+            data['children'].append(0)
+            data['children_original'].append('возраст не указан')
+
+    # ========== 4. ОБРАБОТКА ВЗРОСЛЫХ ==========
     for num_info in all_numbers:
         if num_info['pos'] in processed_positions:
-            continue  # уже обработано в комбинированном паттерне
+            continue
             
         num = num_info['value']
         pos = num_info['pos']
@@ -168,9 +291,27 @@ def parse_user_response(text):
             processed_positions.add(pos)
             continue
         
-        # Проверяем паттерны "нас/мы + число" для взрослых
+    # ========== 4. ОБРАБОТКА ВЗРОСЛЫХ ==========
+    for num_info in all_numbers:
+        if num_info['pos'] in processed_positions:
+            continue
+            
+        num = num_info['value']
+        pos = num_info['pos']
+        t_idx = _find_token_index_for_pos(pos)
+
+        left_context = tokens[t_idx-1]['text'] if t_idx is not None and t_idx-1 >= 0 else ''
+        right_context = tokens[t_idx+1]['text'] if t_idx is not None and t_idx+1 < len(tokens) else ''
+
+        # Проверяем паттерны "нас/мы + число" для общего количества людей
         if left_context in ['нас', 'мы'] and right_context not in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']:
-            if data['adults'] == 0:
+            # Для "нас X" - это общее количество людей
+            total_people = num
+            # Вычитаем детей
+            child_count = len(data['children']) if data['children'] else 0
+            if child_count > 0 and total_people > child_count:
+                data['adults'] = total_people - child_count
+            else:
                 data['adults'] = num
             processed_positions.add(pos)
             continue
@@ -195,76 +336,6 @@ def parse_user_response(text):
             context_window = ' '.join(t['text'] for t in tokens[max(0, t_idx-3):min(len(tokens), t_idx+4)])
             if 'ребен' not in context_window and 'дет' not in context_window:
                 data['adults'] = num
-                processed_positions.add(pos)
-                continue
-        
-        # Если число явно указывает количество детей (перед "дети", "ребенок")
-        if right_context in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']:
-            current_child_count = num
-            processed_positions.add(pos)
-            continue  # не обрабатывать как возраст
-
-        # Если рядом слова ребенок/дети или рядом слова года/лет/месяц - это возраст
-        if any(k in left_context or k in right_context for k in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']) or \
-           any(k in right_context for k in ['лет', 'год', 'г', 'мес', 'месяц']):
-
-            # Берём окно токенов вокруг
-            start = max(0, t_idx - 5)
-            end = min(len(tokens), t_idx + 6)
-            context_phrase = ' '.join(t['text'] for t in tokens[start:end])
-
-            # Ищем комбинированный паттерн "X год(а/лет) ... Y месяц(ев)"
-            age_match = re.search(r'(\d+)\s*(?:лет|год(?:а|ов)?|г\.?)+\s*(?:и\s*)?(\d+)?\s*(?:месяц(?:а|ев)?|мес\.?)+', context_phrase)
-            if age_match:
-                years = int(age_match.group(1))
-                months = int(age_match.group(2)) if age_match.group(2) else 0
-                total_months = years * 12 + months
-                
-                # Добавляем детей с этим возрастом (используем current_child_count)
-                for _ in range(current_child_count):
-                    data['children'].append(total_months)
-                    # Формируем человекочитаемый текст
-                    if months == 0:
-                        data['children_original'].append(f"{years} {_russian_year_label(years)}")
-                    else:
-                        data['children_original'].append(f"{years} {_russian_year_label(years)} и {months} {_russian_month_label(months)}")
-                current_child_count = 1  # сбрасываем после использования
-                
-                # Помечаем все числа в диапазоне контекста как обработанные
-                context_start_pos = tokens[start]['start']
-                context_end_pos = tokens[end-1]['end']
-                for num_info_check in all_numbers:
-                    if context_start_pos <= num_info_check['pos'] < context_end_pos:
-                        processed_positions.add(num_info_check['pos'])
-                continue
-
-            # Если указано в годах
-            if any(k in right_context for k in ['лет', 'год', 'г.']):
-                months = age_to_months(f"{num} лет")
-                if months > 0:
-                    for _ in range(current_child_count):
-                        data['children'].append(months)
-                        data['children_original'].append(f"{num} {_russian_year_label(num)}")
-                    current_child_count = 1
-                processed_positions.add(pos)
-                continue
-
-            # Если указано в месяцах
-            if any(k in right_context for k in ['месяц', 'мес']):
-                months = int(num)
-                if 0 < months < 216:
-                    for _ in range(current_child_count):
-                        data['children'].append(months)
-                        data['children_original'].append(f"{months} {_russian_month_label(months)}")
-                    current_child_count = 1
-                processed_positions.add(pos)
-                continue
-
-            # Если рядом слово 'ребен'/'дет' и нет единиц измерения — это количество детей (маркер)
-            if any(k in context_phrase for k in ['ребен', 'дет', 'детей']):
-                # добавляем маркер 0 (возраст не указан)
-                data['children'].append(0)
-                data['children_original'].append('количество')
                 processed_positions.add(pos)
                 continue
 
@@ -320,6 +391,7 @@ def parse_user_response(text):
     if data['adults'] == 0:
         missing_points.append("количество взрослых")
 
+    # Беременность ВСЕГДА должна быть указана из-за строгих ограничений
     if data['pregnant'] is None:
         missing_points.append("беременность (да/нет)")
 
