@@ -1404,7 +1404,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CATEGORY
 
 async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пользователь выбрал категорию или задал вопрос"""
+    """Пользователь выбрал категорию или написал что-то"""
     user_choice = update.message.text
     user = update.effective_user
     
@@ -1424,231 +1424,189 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # === ВИЗУАЛЬНЫЙ ЭФФЕКТ - TYPING INDICATOR ===
     try:
-        # Показываем что бот "читает" сообщение
         await update.effective_chat.send_chat_action(ChatAction.TYPING)
         await asyncio.sleep(0.5)
     except:
-        pass  # Игнорируем ошибки
+        pass
     
-    # Получаем список допустимых категорий
     valid_categories = get_categories()
     
-    # НОВОЕ: Проверяем, является ли это вопросом И пытаемся найти туры по ключевым словам
-    if user_choice not in valid_categories:
-        # Может быть это вопрос?
-        if is_likely_question(user_choice):
-            # ✅ ЭТО ВОПРОС - сначала пытаемся найти туры по ключевым словам!
-            
-            # Ищем туры которые соответствуют запросу
-            matching_tours = search_tours_by_keywords(user_choice)
-            
-            if matching_tours:
-                # Нашли туры! Получаем профессиональный комментарий от DeepSeek
-                categories_with_tours = {}
-                for tour, category, relevance in matching_tours[:15]:
-                    if category not in categories_with_tours:
-                        categories_with_tours[category] = []
-                    categories_with_tours[category].append(tour)
-                
-                # Генерируем честный профессиональный комментарий
-                first_category = list(categories_with_tours.keys())[0]
-                sample_tours = categories_with_tours[first_category][:2]
-                
-                tour_examples = "\n".join([f"• {t.get('Название', 'Тур')}" for t in sample_tours])
-                
-                deepseek_comment = generate_deepseek_response(
-                    user_query=f"Пользователь спросил про: {user_choice}. Я нашел {len(matching_tours)} туров по этому запросу. "
-                               f"Вот примеры: {tour_examples}",
-                    tour_data=None,
-                    context_info=f"Результаты поиска по запросу пользователя: {user_choice}. Категория: {first_category}",
-                    user_name=user.first_name
-                )
-                
-                deepseek_comment = format_deepseek_answer(deepseek_comment)
-                
-                # Отправляем комментарий помощника
-                await update.message.reply_text(
-                    deepseek_comment,
-                    parse_mode='Markdown'
-                )
-                
-                # Затем показываем полный список туров
-                tours_to_show = categories_with_tours[first_category]
-                
-                context.user_data['selected_category'] = first_category
-                context.user_data['ranked_tours'] = tours_to_show
-                context.user_data['tour_offset'] = 0
-                
-                await update.message.reply_text(
-                    format_tours_group(tours_to_show[:5]),
-                    parse_mode='Markdown',
-                    reply_markup=make_tours_keyboard(tours_to_show, 0, 5)
-                )
-                
-                # === АНАЛИТИКА ===
-                track_user_session(context, BOT_STAGES['category_selection'], {'search_query': user_choice})
-                logger.log_action(user.id, "searched_tours", stage=BOT_STAGES['category_selection'], query=user_choice, found=len(matching_tours))
-                context.user_data['last_action'] = 'search_query'
-                # === КОНЕЦ АНАЛИТИКИ ===
-                
-                return TOUR_DETAILS
-            else:
-                # Туры не найдены - используем DeepSeek для ответа
-                # Показываем typing indicator - бот "думает"
-                await update.effective_chat.send_chat_action(ChatAction.TYPING)
-                await asyncio.sleep(1)
-                
-                # Подготавливаем контекст для DeepSeek
-                context_info = "Пользователь еще не выбрал категорию, задает вопрос о Пхукете"
-                
-                # Генерируем ответ с DeepSeek
-                deepseek_answer = generate_deepseek_response(
-                    user_query=user_choice,
-                    tour_data=None,
-                    context_info=context_info,
-                    user_name=user.first_name
-                )
-                
-                # Красиво форматируем ответ
-                deepseek_answer = format_deepseek_answer(deepseek_answer)
-                
-                # Отправляем ответ
-                await update.message.reply_text(
-                    deepseek_answer,
-                    parse_mode='Markdown',
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                
-                # После ответа показываем категории
-                await update.message.reply_text(
-                    "📋 *Теперь выбирайте категорию экскурсий:*",
-                    parse_mode='Markdown',
-                    reply_markup=make_category_keyboard()
-                )
-                
-                # === АНАЛИТИКА ===
-                track_user_session(context, BOT_STAGES['category_selection'])
-                logger.log_action(user.id, "asked_question_at_category", stage=BOT_STAGES['category_selection'], query=user_choice)
-                context.user_data['last_action'] = 'category_question'
-                # === КОНЕЦ АНАЛИТИКИ ===
-                
-                return CATEGORY
-
-        else:
-            # Это не вопрос и не категория - ошибка ввода
-            await update.message.reply_text(
-                f"🤔 *'{user_choice}'* - это не стандартная категория экскурсий.\n\n"
-                "🎯 *Как выбрать экскурсию:*\n"
-                "• Нажмите на одну из кнопок ниже\n"
-                "• Или напишите, что вас интересует (слонов, дельфинов, храмы, рыбалку, яхту)\n"
-                "• Или задайте вопрос о Пхукете!\n\n"
-                "📝 *Доступные категории:*\n" + "\n".join(f"• {cat}" for cat in valid_categories) + "\n\n"
-                "💡 *Примеры поиска:* \"слонов\" 🐘, \"аватара\" 🎬, \"рыбалку\" 🎣, \"яхту\" ⛵",
-                parse_mode='Markdown',
-                reply_markup=make_category_keyboard()
-            )
-            return CATEGORY
+    # ════════════════════════════════════════════════════════════════════════
+    # ЛОГИКА: 1) Это категория? 2) Нет? → Ищем туры по ключевым словам
+    # 3) Найдены? → Показываем 4) Нет? → Это вопрос? → DeepSeek
+    # 5) Ничего? → Ошибка
+    # ════════════════════════════════════════════════════════════════════════
     
-    # === АНАЛИТИКА: ВЫБОР КАТЕГОРИИ ===
-    track_user_session(context, BOT_STAGES['category_selection'], {'category': user_choice})
-    logger.log_action(user.id, "chose_category", stage=BOT_STAGES['category_selection'], category=user_choice)
-    context.user_data['last_action'] = 'category_choice'
-    # === КОНЕЦ АНАЛИТИКИ ===
-    
-    # Это КАТЕГОРИЯ - продолжаем обычный процесс
-    # Проверяем, если уже есть данные о пользователе
-    if 'user_data' in context.user_data:
-        user_data = context.user_data.get('user_data', {})
-        is_pregnant = user_data.get('pregnant', False)
-        children_ages = user_data.get('children', [])
-        has_young_children = any(age < 12 for age in children_ages)
+    # ВАРИАНТ 1: ЭТО СТАНДАРТНАЯ КАТЕГОРИЯ
+    if user_choice in valid_categories:
+        # === АНАЛИТИКА ===
+        track_user_session(context, BOT_STAGES['category_selection'], {'category': user_choice})
+        logger.log_action(user.id, "chose_category", stage=BOT_STAGES['category_selection'], category=user_choice)
+        context.user_data['last_action'] = 'category_choice'
+        # === КОНЕЦ АНАЛИТИКИ ===
         
-        # Если беременность или дети до года И выбрано Море
-        if (is_pregnant or has_young_children) and "Море" in user_choice:
-            response = "⚠️ *Внимание!*\n\n"
+        # Проверяем ограничения (беременность, маленькие дети + Море)
+        if 'user_data' in context.user_data:
+            user_data = context.user_data.get('user_data', {})
+            is_pregnant = user_data.get('pregnant', False)
+            children_ages = user_data.get('children', [])
+            has_young_children = any(age < 12 for age in children_ages)
             
-            if is_pregnant:
-                response += "🤰 *Беременным* = ❌ **ВСЕ** морские туры\n"
-            
-            if has_young_children:
-                response += "👶 *Детям до года* = ❌ **ВСЕ** морские туры\n"
-            
-            response += "\n🎯 *Лучше выбрать:*\n"
-            response += "• 🏞️ *Суша (обзорные)* — Аватар, смотровые\n"
-            response += "• 🐘 *Суша (семейные)* — слоны, аквапарк\n"
-            response += "• 🎭 *Вечерние шоу* — Сиам Нирамит\n\n"
-            
-            response += "*Продолжить с Морем или выбрать другую категорию?*"
-            
-            # Меняем текст кнопки в зависимости от ограничений
-            button_text = "🌊 Продолжить с Морем"
-            if is_pregnant or has_young_children:
-                button_text += " (только для ознакомления)"
-            # Для случаев без ограничений - без скобок
-            
-            keyboard = [
-                [button_text],
-                ["🔄 Выбрать другую категорию"]
-            ]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-            
-            await update.message.reply_text(
-                response,
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-            
-            # Сохраняем выбор категории, но ждём подтверждения
-            context.user_data['pending_category'] = user_choice
-            return CATEGORY  # Остаёмся в выборе категории
-    
-    # Если нет ограничений или не Море - продолжаем как обычно
-    context.user_data['category'] = user_choice
-    
-    # Проверяем, есть ли уже полные данные
-    if 'user_data' in context.user_data and context.user_data['user_data']:
-        user_data = context.user_data['user_data']
-        # Данные уже есть - сразу показываем туры
-        return await proceed_to_tours(update, context, user_data)
-    
-    # Данных нет - запрашиваем
-    # Сохраняем экскурсии этой категории
-    category_tours = [t for t in TOURS if t.get("Для информации", "") == user_choice]
-    context.user_data['filtered_tours'] = category_tours
-    
-    # Считаем хиты в категории
-    hit_tours = [t for t in category_tours if "ХИТ" in t.get("Название", "")]
-    
-    response = f"Отлично! Выбрана категория: *{user_choice}*\n\n"
-    
-    if hit_tours:
-        hit_count = len(hit_tours)
-        if hit_count == 1:
-            hit_text = "1 *ХИТ*"
-        elif hit_count in [2, 3, 4]:
-            hit_text = f"{hit_count} *ХИТА*"
+            if (is_pregnant or has_young_children) and "Море" in user_choice:
+                response = "⚠️ *Внимание!*\n\n"
+                
+                if is_pregnant:
+                    response += "🤰 *Беременным* = ❌ **ВСЕ** морские туры\n"
+                
+                if has_young_children:
+                    response += "👶 *Детям до года* = ❌ **ВСЕ** морские туры\n"
+                
+                response += "\n🎯 *Лучше выбрать:*\n"
+                response += "• 🏞️ *Суша (обзорные)* — Аватар, смотровые\n"
+                response += "• 🐘 *Суша (семейные)* — слоны, аквапарк\n"
+                response += "• 🎭 *Вечерние шоу* — Сиам Нирамит\n\n"
+                response += "*Продолжить с Морем или выбрать другую категорию?*"
+                
+                keyboard = [
+                    ["🌊 Продолжить с Морем"],
+                    ["🔄 Выбрать другую категорию"]
+                ]
+                reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+                
+                await update.message.reply_text(response, parse_mode='Markdown', reply_markup=reply_markup)
+                context.user_data['pending_category'] = user_choice
+                return CATEGORY
+        
+        # Нет ограничений - продолжаем обычно
+        context.user_data['category'] = user_choice
+        
+        if 'user_data' in context.user_data and context.user_data['user_data']:
+            return await proceed_to_tours(update, context, context.user_data['user_data'])
+        
+        # Запрашиваем данные пользователя
+        category_tours = [t for t in TOURS if t.get("Для информации", "") == user_choice]
+        context.user_data['filtered_tours'] = category_tours
+        
+        hit_tours = [t for t in category_tours if "ХИТ" in t.get("Название", "")]
+        
+        response = f"Отлично! Выбрана категория: *{user_choice}*\n\n"
+        
+        if hit_tours:
+            hit_count = len(hit_tours)
+            if hit_count == 1:
+                hit_text = "1 *ХИТ*"
+            elif hit_count in [2, 3, 4]:
+                hit_text = f"{hit_count} *ХИТА*"
+            else:
+                hit_text = f"{hit_count} *ХИТОВ*"
+            response += f"В этой категории у нас есть {hit_text}! 🏆\n"
+            response += "Давайте я подберу для вас самые популярные варианты.\n\n"
         else:
-            hit_text = f"{hit_count} *ХИТОВ*"
-        response += f"В этой категории у нас есть {hit_text}! 🏆\n"
-        response += "Давайте я подберу для вас самые популярные варианты.\n\n"
-    else:
-        response += "Давайте я подберу для вас лучшие варианты.\n\n"
+            response += "Давайте я подберу для вас лучшие варианты.\n\n"
+        
+        response += "Но сначала мне нужно уточнить несколько деталей:\n\n"
+        response += "1️⃣ *Состав группы:* Сколько взрослых и детей? Укажите возраст каждого ребенка (например: 8 лет, 3 года, менее 1 года).\n"
+        response += "2️⃣ *Беременность:* Есть ли беременные в группе?\n"
+        response += "3️⃣ *Что важно:* Комфорт, бюджет, фотографии, не любите рано вставать?\n"
+        response += "4️⃣ *Здоровье:* Проблемы со спиной, укачивание, сложности с ходьбой?\n\n"
+        response += "Ответьте, пожалуйста, одним сообщением. Например:\n"
+        response += "_«2 взрослых, ребенок 5 лет, не беременны, хотим комфорт и не рано вставать»_"
+        
+        await update.message.reply_text(response, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        return QUALIFICATION
     
-    response += "Но сначала мне нужно уточнить несколько деталей:\n\n"
-    response += "1️⃣ *Состав группы:* Сколько взрослых и детей? Укажите возраст каждого ребенка (например: 8 лет, 3 года, менее 1 года).\n"
-    response += "2️⃣ *Беременность:* Есть ли беременные в группе?\n"
-    response += "3️⃣ *Что важно:* Комфорт, бюджет, фотографии, не любите рано вставать?\n"
-    response += "4️⃣ *Здоровье:* Проблемы со спиной, укачивание, сложности с ходьбой?\n\n"
-    response += "Ответьте, пожалуйста, одним сообщением. Например:\n"
-    response += "_«2 взрослых, ребенок 5 лет, не беременны, хотим комфорт и не рано вставать»_"
+    # ВАРИАНТ 2: НЕ КАТЕГОРИЯ - СНАЧАЛА ИЩЕМ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ
+    matching_tours = search_tours_by_keywords(user_choice)
     
+    if matching_tours:
+        # ✅ НАЙДЕНЫ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ!
+        categories_with_tours = {}
+        for tour, category, relevance in matching_tours[:15]:
+            if category not in categories_with_tours:
+                categories_with_tours[category] = []
+            categories_with_tours[category].append(tour)
+        
+        first_category = list(categories_with_tours.keys())[0]
+        sample_tours = categories_with_tours[first_category][:2]
+        
+        tour_examples = "\n".join([f"• {t.get('Название', 'Тур')}" for t in sample_tours])
+        
+        deepseek_comment = generate_deepseek_response(
+            user_query=f"Пользователь спросил про: {user_choice}. Я нашел {len(matching_tours)} туров по этому запросу. "
+                       f"Вот примеры: {tour_examples}",
+            tour_data=None,
+            context_info=f"Результаты поиска по запросу пользователя: {user_choice}. Категория: {first_category}",
+            user_name=user.first_name
+        )
+        
+        deepseek_comment = format_deepseek_answer(deepseek_comment)
+        
+        await update.message.reply_text(deepseek_comment, parse_mode='Markdown')
+        
+        tours_to_show = categories_with_tours[first_category]
+        
+        context.user_data['selected_category'] = first_category
+        context.user_data['ranked_tours'] = tours_to_show
+        context.user_data['tour_offset'] = 0
+        
+        await update.message.reply_text(
+            format_tours_group(tours_to_show[:5]),
+            parse_mode='Markdown',
+            reply_markup=make_tours_keyboard(tours_to_show, 0, 5)
+        )
+        
+        # === АНАЛИТИКА ===
+        track_user_session(context, BOT_STAGES['category_selection'], {'search_query': user_choice})
+        logger.log_action(user.id, "searched_tours", stage=BOT_STAGES['category_selection'], query=user_choice, found=len(matching_tours))
+        context.user_data['last_action'] = 'search_query'
+        # === КОНЕЦ АНАЛИТИКИ ===
+        
+        return TOUR_DETAILS
+    
+    # ВАРИАНТ 3: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ВОПРОС?
+    if is_likely_question(user_choice):
+        # ✅ ЭТО ВОПРОС - ОТВЕЧАЕМ DEEPSEEK
+        await update.effective_chat.send_chat_action(ChatAction.TYPING)
+        await asyncio.sleep(1)
+        
+        deepseek_answer = generate_deepseek_response(
+            user_query=user_choice,
+            tour_data=None,
+            context_info="Пользователь еще не выбрал категорию, задает вопрос о Пхукете",
+            user_name=user.first_name
+        )
+        
+        deepseek_answer = format_deepseek_answer(deepseek_answer)
+        
+        await update.message.reply_text(deepseek_answer, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+        
+        await update.message.reply_text(
+            "📋 *Теперь выбирайте категорию экскурсий:*",
+            parse_mode='Markdown',
+            reply_markup=make_category_keyboard()
+        )
+        
+        # === АНАЛИТИКА ===
+        track_user_session(context, BOT_STAGES['category_selection'])
+        logger.log_action(user.id, "asked_question_at_category", stage=BOT_STAGES['category_selection'], query=user_choice)
+        context.user_data['last_action'] = 'category_question'
+        # === КОНЕЦ АНАЛИТИКИ ===
+        
+        return CATEGORY
+    
+    # ВАРИАНТ 4: НИЧЕГО НЕ ПОДХОДИТ - ОШИБКА ВВОДА
     await update.message.reply_text(
-        response,
+        f"🤔 *'{user_choice}'* - это не стандартная категория экскурсий.\n\n"
+        "🎯 *Как выбрать экскурсию:*\n"
+        "• Нажмите на одну из кнопок ниже\n"
+        "• Или напишите, что вас интересует (слонов, дельфинов, храмы, рыбалку, яхту)\n"
+        "• Или задайте вопрос о Пхукете!\n\n"
+        "📝 *Доступные категории:*\n" + "\n".join(f"• {cat}" for cat in valid_categories) + "\n\n"
+        "💡 *Примеры поиска:* \"слонов\" 🐘, \"аватара\" 🎬, \"рыбалку\" 🎣, \"яхту\" ⛵",
         parse_mode='Markdown',
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=make_category_keyboard()
     )
-    
-    return QUALIFICATION
+    return CATEGORY
 
 async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка выбора после предупреждения о море"""
