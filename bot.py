@@ -440,16 +440,36 @@ async def send_message_with_effect(update, text, reply_markup=None, parse_mode='
             reply_markup=reply_markup
         )
 
-# Клавиатура с категориями
+# Клавиатура с категориями (гибридная: ХИТ + меню)
 def make_category_keyboard():
     categories = get_categories()
-    # Создаем кнопки по 3 в ряд для оптимизации места на экране
+    
+    # Определяем ХИТ категории (самые популярные)
+    hit_categories = [
+        "Море (Острова)",  # Популярна
+        "Суша (семейные)",  # С детьми
+        "Вечерние Шоу"      # Очень популярна
+    ]
+    
     keyboard = []
-    for i in range(0, len(categories), 3):
-        row = categories[i:i+3]
+    
+    # Добавляем ХИТ категории отдельными кнопками (большие)
+    for cat in categories:
+        if cat in hit_categories:
+            keyboard.append([cat])
+    
+    # Добавляем "Все категории" с dropdown меню
+    all_cats_menu = []
+    remaining_cats = [c for c in categories if c not in hit_categories]
+    
+    # Вставляем остальные категории по 2 в ряд
+    for i in range(0, len(remaining_cats), 2):
+        row = remaining_cats[i:i+2]
         keyboard.append(row)
-    # Добавляем кнопку "Новый поиск" в конце
+    
+    # Добавляем кнопку "Новый поиск"
     keyboard.append(["🔄 Новый поиск"])
+    
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ==================== ФУНКЦИЯ ДЛЯ КОНВЕРТАЦИИ ВОЗРАСТА ====================
@@ -1309,6 +1329,9 @@ def make_tours_keyboard(tours, offset=0, limit=5, show_question_button=True):
         if display_name.startswith(",") or display_name.startswith(";"):
             display_name = display_name[1:].strip()
         
+        # Удаляем пустые скобки вроде ()
+        display_name = display_name.replace("()", "").strip()
+        
         # Обрезаем слишком длинные названия
         if len(display_name) > 30:
             display_name = display_name[:27] + "..."
@@ -1408,18 +1431,39 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_choice = update.message.text
     user = update.effective_user
     
-    # ПРОВЕРЯЕМ КНОПКУ "НОВЫЙ ПОИСК" - сбрасываем контекст и начинаем заново
+    # ПРОВЕРЯЕМ КНОПКУ "НОВЫЙ ПОИСК" - сбрасываем только категорию и туры, но НЕ очищаем данные группы
     if user_choice == "🔄 Новый поиск":
-        context.user_data.clear()
+        # Сохраняем данные о группе (беременность, дети, здоровье)
+        saved_user_data = context.user_data.get('user_data', {})
         
-        welcome_text = f"""Хорошо, начнём с чистого листа! 📋
+        # Очищаем только туры и категорию
+        context.user_data.pop('category', None)
+        context.user_data.pop('filtered_tours', None)
+        context.user_data.pop('ranked_tours', None)
+        context.user_data.pop('tour_offset', None)
+        context.user_data.pop('selected_category', None)
+        
+        # Восстанавливаем данные группы
+        if saved_user_data:
+            context.user_data['user_data'] = saved_user_data
+            
+            # Если уже есть данные - сразу спрашиваем категорию
+            await update.message.reply_text(
+                "Отлично! Начнём новый поиск с сохраненными данными вашей группы.\n\n"
+                "Какую категорию вам выбрать? Нажмите кнопку ниже 👇",
+                reply_markup=make_category_keyboard()
+            )
+        else:
+            # Нет данных - спрашиваем о группе
+            welcome_text = f"""Хорошо, начнём с чистого листа! 📋
 
 Расскажите мне о своей группе - кто едет?"""
+            
+            await update.message.reply_text(
+                welcome_text,
+                reply_markup=make_category_keyboard()
+            )
         
-        await update.message.reply_text(
-            welcome_text,
-            reply_markup=make_category_keyboard()
-        )
         return CATEGORY
     
     # === ВИЗУАЛЬНЫЙ ЭФФЕКТ - TYPING INDICATOR ===
@@ -2153,7 +2197,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
     
     callback_data = query.data
 
-# === АНАЛИТИКА: ПРОСМОТР ЭКСКУРСИИ ===
+    # === АНАЛИТИКА: ПРОСМОТР ЭКСКУРСИИ ===
     user = query.from_user
     track_user_session(context, BOT_STAGES['tour_details'])
     logger.log_action(user.id, "viewed_tour", stage=BOT_STAGES['tour_details'])
@@ -2162,33 +2206,42 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
     
     if callback_data.startswith("tour_"):
         # Пользователь выбрал конкретную экскурсию
-        tour_index = int(callback_data.split("_")[1])
+        try:
+            tour_index = int(callback_data.split("_")[1])
+        except (IndexError, ValueError):
+            await query.answer("❌ Ошибка в обработке выбора", show_alert=True)
+            return
+        
         ranked_tours = context.user_data.get('ranked_tours', [])
         
-        if tour_index < len(ranked_tours):
-            tour = ranked_tours[tour_index]
-            
-            # ДОБАВЛЯЕМ ПОДСКАЗКУ ПЕРЕД ОПИСАНИЕМ
-            tip_text = f"💡 *Совет:* Если у вас есть вопросы по экскурсии, просто спросите!\n\n"
-            
-            # ИСПОЛЬЗУЕМ НОВОЕ ФОРМАТИРОВАНИЕ В СТИЛЕ АЛЕКСА
-            description = tip_text + format_tour_description_alex_style(tour)
-            
-            # Создаем кнопки для навигации
-            keyboard = [
-                [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_{tour_index}")],
-                [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
-                [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_{tour_index}")],
-                [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")],
-                [InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")]
-            ]
-            
-            await query.edit_message_text(
-                text=description,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                disable_web_page_preview=False  # Разрешаем превью ссылок
-            )
+        # Защита: если ranked_tours пуста или индекс неправильный
+        if not ranked_tours or tour_index >= len(ranked_tours):
+            await query.answer("❌ Экскурсия не найдена. Пожалуйста, выберите снова.", show_alert=True)
+            return
+        
+        tour = ranked_tours[tour_index]
+        
+        # ДОБАВЛЯЕМ ПОДСКАЗКУ ПЕРЕД ОПИСАНИЕМ
+        tip_text = f"💡 *Совет:* Если у вас есть вопросы по экскурсии, просто спросите!\n\n"
+        
+        # ИСПОЛЬЗУЕМ НОВОЕ ФОРМАТИРОВАНИЕ В СТИЛЕ АЛЕКСА
+        description = tip_text + format_tour_description_alex_style(tour)
+        
+        # Создаем кнопки для навигации
+        keyboard = [
+            [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_{tour_index}")],
+            [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
+            [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_{tour_index}")],
+            [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")],
+            [InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")]
+        ]
+        
+        await query.edit_message_text(
+            text=description,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            disable_web_page_preview=False
+        )
     
     elif callback_data.startswith("more_info_"):
         # Пользователь хочет дополнительную информацию
