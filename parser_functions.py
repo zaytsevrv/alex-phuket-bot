@@ -138,24 +138,16 @@ def parse_user_response(text):
         if partner in ['муж', 'мужем', 'жен', 'женой', 'партнёр', 'партнер', 'друг', 'подруг']:
             data['adults'] = 2
     
-    # Ищем "мы вдвоем", "мы втроем" и т.д.
-    my_v_match = re.search(r'мы\s+(в\d+ем)', text_lower)
-    if my_v_match:
-        v_word = my_v_match.group(1)
-        total_people = 0
-        if v_word == 'вдвоем':
-            total_people = 2
-        elif v_word == 'втроем':
-            total_people = 3
-        elif v_word == 'вчетвером':
-            total_people = 4
-        
-        # Если есть дети, вычитаем их из общего числа
-        if 'ребен' in text_lower or 'дет' in text_lower:
-            child_count = len(data['children']) if data['children'] else 0
-            data['adults'] = max(1, total_people - child_count)
-        else:
-            data['adults'] = total_people
+    # Ищем паттерн "мы вдвоем", "мы втроем" и т.д.
+    my_pattern = re.search(r'(мы|нас)\s+(в\d+ем|вдвоем|втроем|вчетвером)', text_lower)
+    if my_pattern:
+        pattern_word = my_pattern.group(2)
+        if pattern_word in ['вдвоем', 'вдвое', 'вдвои']:
+            data['adults'] = 2
+        elif pattern_word in ['втроем', 'втроем']:
+            data['adults'] = 3
+        elif pattern_word == 'вчетвером':
+            data['adults'] = 4
 
     # ========== 2. СБОР ВСЕХ ЧИСЕЛ ==========
     all_numbers = []
@@ -282,7 +274,8 @@ def parse_user_response(text):
             data['children'].append(0)
             data['children_original'].append('возраст не указан')
 
-    # ========== 4. ОБРАБОТКА ВЗРОСЛЫХ ==========
+    # ========== 4. ОБРАБОТКА ВЗРОСЛЫХ (ЕДИНЫЙ ЦИКЛ) ==========
+    # Объединённая логика базовой и расширённой обработки
     for num_info in all_numbers:
         if num_info['pos'] in processed_positions:
             continue
@@ -294,27 +287,18 @@ def parse_user_response(text):
         left_context = tokens[t_idx-1]['text'] if t_idx is not None and t_idx-1 >= 0 else ''
         right_context = tokens[t_idx+1]['text'] if t_idx is not None and t_idx+1 < len(tokens) else ''
 
-        # Если контекст явно говорит про взрослых
+        # 1. Если контекст явно говорит про взрослых
         if any(k in left_context or k in right_context for k in ['взросл', 'взр']):
             if data['adults'] == 0:
                 data['adults'] = num
             processed_positions.add(pos)
             continue
         
-    # ========== 4. ОБРАБОТКА ВЗРОСЛЫХ ==========
-    for num_info in all_numbers:
-        if num_info['pos'] in processed_positions:
-            continue
-            
-        num = num_info['value']
-        pos = num_info['pos']
-        t_idx = _find_token_index_for_pos(pos)
-
-        left_context = tokens[t_idx-1]['text'] if t_idx is not None and t_idx-1 >= 0 else ''
-        right_context = tokens[t_idx+1]['text'] if t_idx is not None and t_idx+1 < len(tokens) else ''
-
-        # Проверяем паттерны "нас/мы + число" для общего количества людей
-        if left_context in ['нас', 'мы'] and right_context not in ['ребен', 'дет', 'детей', 'ребён', 'ребенка']:
+        # 2. Проверяем паттерны "нас/мы + число" для общего количества людей
+        # ВАЖНО: пропускаем "вдвоем", "втроем" и т.д., так как они уже обработаны в специальной обработке
+        if (left_context in ['нас', 'мы'] and 
+            right_context not in ['ребен', 'дет', 'детей', 'ребён', 'ребенка'] and
+            not (num_info.get('type') == 'word' and num_info.get('word') in ['вдвоем', 'втроем', 'вчетвером'])):
             # Для "нас X" - это общее количество людей
             total_people = num
             # Вычитаем детей
@@ -326,7 +310,7 @@ def parse_user_response(text):
             processed_positions.add(pos)
             continue
         
-        # Проверяем паттерны типа "я с мужем" (2 взрослых), "я одна" (1 взрослый)
+        # 3. Проверяем паттерны типа "я с мужем" (2 взрослых), "я одна" (1 взрослый)
         if left_context == 'я':
             if right_context in ['одна', 'один']:
                 data['adults'] = 1
@@ -340,12 +324,20 @@ def parse_user_response(text):
                     processed_positions.add(pos)
                     continue
         
-        # Проверяем "вдвоем", "втроем" и т.д.
+        # 4. Проверяем "вдвоем", "втроем" и т.д.
+        # ВАЖНО: пропускаем, если уже обработаны в специальной обработке выше
         if num_info['type'] == 'word' and num_info['word'] in ['вдвоем', 'втроем', 'вчетвером']:
-            # Ищем контекст
-            context_window = ' '.join(t['text'] for t in tokens[max(0, t_idx-3):min(len(tokens), t_idx+4)])
-            if 'ребен' not in context_window and 'дет' not in context_window:
-                data['adults'] = num
+            # Если уже установлено количество взрослых (из специальной обработки) - не переписываем
+            if data['adults'] == 0:
+                # Ищем контекст
+                context_window = ' '.join(t['text'] for t in tokens[max(0, t_idx-3):min(len(tokens), t_idx+4)])
+                # Проверяем есть ли дети в контексте
+                if 'ребен' not in context_window and 'дет' not in context_window:
+                    data['adults'] = num
+                    processed_positions.add(pos)
+                    continue
+            else:
+                # Уже установлено из специальной обработки, просто пропускаем этот токен
                 processed_positions.add(pos)
                 continue
 

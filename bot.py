@@ -682,12 +682,24 @@ def save_partial_data(context, new_data):
     if 'adults' in new_data and new_data['adults'] > 0:
         user_data['adults'] = new_data['adults']
     
-    # Обновляем детей
-    if 'children' in new_data and new_data['children']:
-        for age, original in zip(new_data['children'], new_data['children_original']):
-            if age not in user_data['children']:
-                user_data['children'].append(age)
-                user_data['children_original'].append(original)
+    # Обновляем детей (с поддержкой очистки)
+    if 'children' in new_data:
+        if new_data['children']:
+            # Если пришли новые дети - добавляем их
+            for age, original in zip(new_data['children'], new_data['children_original']):
+                if age not in user_data['children']:
+                    user_data['children'].append(age)
+                    user_data['children_original'].append(original)
+        else:
+            # Если пришло пусто (new_data['children'] = []) - это означает "дети есть, но возраст не указан"
+            # или это означает "дети отсутствуют"
+            # Проверим raw_text для определения намерения
+            raw_lower = new_data.get('raw_text', '').lower() if new_data.get('raw_text') else ""
+            if any(word in raw_lower for word in ['без детей', 'нет детей', 'детей нет']):
+                # Пользователь явно сказал "нет детей" - очищаем список
+                user_data['children'] = []
+                user_data['children_original'] = []
+            # Иначе - это просто неудалось распарсить возраст, оставляем как есть
     
     # Обновляем беременность (только если явно указано)
     if 'pregnant' in new_data and new_data['pregnant'] is not None:
@@ -718,13 +730,12 @@ def check_missing_points(user_data):
         missing_points.append("беременность (да/нет)")
     
     # Проверяем информацию о детях
-    raw_text_lower = user_data['raw_text'].lower() if user_data['raw_text'] else ""
-    child_keywords = ['ребен', 'дет', 'малыш', 'младш', 'сын', 'доч']
-    
-    if any(keyword in raw_text_lower for keyword in child_keywords):
-        if not user_data['children']:
-            # Если упомянули детей, но возрастов нет
-            missing_points.append("информация о детях")
+    # Используем ТЕКУЩЕЕ состояние: если пользователь явно указал взрослых, но нет информации о детях
+    # спрашиваем про них. Это более надёжно, чем проверка старого raw_text
+    if user_data['adults'] > 0 and user_data.get('children') is None:
+        # Дети - это важный критерий безопасности (для морских туров)
+        # Если у нас есть взрослые, но нет информации о детях - спрашиваем
+        missing_points.append("информация о детях")
     
     return missing_points
 
@@ -2191,18 +2202,6 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
             await ask_for_clarification(update, context, current_data, current_missing)
         
         return CONFIRMATION
-    
-    # Обрабатываем ответ на конкретный вопрос
-    user_data = context.user_data.get('user_data', {})
-    
-    if next_question == 'adults':
-        return await handle_adults_clarification(update, context, user_text, user_data)
-    elif next_question == 'children':
-        return await handle_children_clarification(update, context, user_text, user_data)
-    elif next_question == 'pregnant':
-        return await handle_pregnant_clarification(update, context, user_text, user_data)
-    
-    return CONFIRMATION
     
     # Обрабатываем ответ на конкретный вопрос
     user_data = context.user_data.get('user_data', {})
