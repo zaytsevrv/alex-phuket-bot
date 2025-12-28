@@ -1126,6 +1126,25 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь выбрал категорию"""
     user_choice = update.message.text
     
+    # Получаем список допустимых категорий
+    valid_categories = get_categories()
+    
+    # Проверяем, является ли выбор допустимой категорией
+    if user_choice not in valid_categories:
+        # Не допустимая категория - показываем инструкции
+        await update.message.reply_text(
+            f"🤔 *'{user_choice}'* - это не стандартная категория экскурсий.\n\n"
+            "🎯 *Как выбрать экскурсию:*\n"
+            "• Нажмите на одну из кнопок выше\n"
+            "• Или напишите название категории точно\n\n"
+            "📝 *Доступные категории:*\n" + "\n".join(f"• {cat}" for cat in valid_categories[:5]) + 
+            ("\n• ... и другие" if len(valid_categories) > 5 else "") + "\n\n"
+            "💬 *Можете также задать вопрос* - я отвечу естественно!",
+            parse_mode='Markdown',
+            reply_markup=make_category_keyboard()
+        )
+        return CATEGORY
+    
     # === АНАЛИТИКА: ВЫБОР КАТЕГОРИИ ===
     user = update.effective_user
     track_user_session(context, BOT_STAGES['category_selection'], {'category': user_choice})
