@@ -742,6 +742,10 @@ def rank_tours_by_priorities(tours, user_data):
         tour_description = tour.get("Описание", "").lower()
         tour_price = tour.get("Цена Взр", "")
         
+        # ХИТ всегда в приоритете - добавляем высокий балл
+        if tour.get("ХИТ", "").strip():
+            score += 10
+        
         # Проверяем каждый приоритет
         for priority in priorities:
             if priority == 'комфорт':
