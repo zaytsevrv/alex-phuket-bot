@@ -411,6 +411,54 @@ def search_tours_by_keywords(query):
     
     return results
 
+# ==================== ГИБРИДНЫЙ ПОИСК С НОРМАЛИЗАЦИЕЙ ====================
+def search_tours_by_keywords_hybrid(query):
+    """
+    ГИБРИДНЫЙ ПОИСК с нормализацией:
+    1. Точный поиск (как раньше)
+    2. Размытый поиск (difflib) если точный не дал результатов
+    3. Если всё равно ничего - возвращает пусто для DeepSeek
+    """
+    from difflib import get_close_matches
+    
+    # Шаг 1: Точный поиск
+    results = search_tours_by_keywords(query)
+    if results:
+        return results, query  # Возвращаем результаты и оригинальный запрос
+    
+    # Шаг 2: Размытый поиск (для опечаток и словоформ)
+    # Собираем все поля для поиска
+    all_searchable = set()
+    
+    for tour in TOURS:
+        name = tour.get('Название', '').lower()
+        keywords = str(tour.get('Ключевые слова', '')).lower()
+        description = str(tour.get('Описание (Витрина)', '')).lower()
+        
+        # Добавляем целые поля
+        if name:
+            all_searchable.add(name)
+        if keywords:
+            all_searchable.add(keywords)
+        
+        # Добавляем слова из описания
+        for word in description.split():
+            if len(word) > 3:  # Только слова больше 3 букв
+                all_searchable.add(word)
+    
+    # Ищем похожие слова (80% сходства)
+    close_matches = get_close_matches(query.lower(), list(all_searchable), n=3, cutoff=0.8)
+    
+    if close_matches:
+        # Пробуем первый closest match
+        for match in close_matches:
+            results = search_tours_by_keywords(match)
+            if results:
+                return results, match  # Возвращаем с нормализованным запросом
+    
+    # Шаг 3: Если ничего не найдено - пусто
+    return [], query
+
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВИЗУАЛА ===
 
 async def send_message_with_effect(update, text, reply_markup=None, parse_mode='Markdown', use_effect=True):
@@ -446,9 +494,9 @@ def make_category_keyboard():
     
     # Определяем ХИТ категории (самые популярные)
     hit_categories = [
-        "Море (Острова)",  # Популярна
-        "Суша (семейные)",  # С детьми
-        "Вечерние Шоу"      # Очень популярна
+        "Море (Острова)",  # 38 туров, самая большая
+        "Суша (семейные)",  # Семейный туризм
+        "Суша (обзорные)"   # 16 туров, вторая по величине
     ]
     
     keyboard = []
@@ -458,8 +506,7 @@ def make_category_keyboard():
         if cat in hit_categories:
             keyboard.append([cat])
     
-    # Добавляем "Все категории" с dropdown меню
-    all_cats_menu = []
+    # Добавляем остальные категории по 2 в ряд
     remaining_cats = [c for c in categories if c not in hit_categories]
     
     # Вставляем остальные категории по 2 в ряд
@@ -1549,8 +1596,8 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
         return QUALIFICATION
     
-    # ВАРИАНТ 2: НЕ КАТЕГОРИЯ - СНАЧАЛА ИЩЕМ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ
-    matching_tours = search_tours_by_keywords(user_choice)
+    # ВАРИАНТ 2: НЕ КАТЕГОРИЯ - СНАЧАЛА ИЩЕМ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ (ГИБРИДНЫЙ ПОИСК)
+    matching_tours, normalized_query = search_tours_by_keywords_hybrid(user_choice)
     
     if matching_tours:
         # ✅ НАЙДЕНЫ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ!
@@ -1565,15 +1612,20 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         tour_examples = "\n".join([f"• {t.get('Название', 'Тур')}" for t in sample_tours])
         
+        # Показываем что мы нормализовали запрос если он изменился
+        query_note = ""
+        if normalized_query.lower() != user_choice.lower():
+            query_note = f"\n\n(Искал по: *{normalized_query}*)"
+        
         deepseek_comment = generate_deepseek_response(
             user_query=f"Пользователь спросил про: {user_choice}. Я нашел {len(matching_tours)} туров по этому запросу. "
                        f"Вот примеры: {tour_examples}",
             tour_data=None,
-            context_info=f"Результаты поиска по запросу пользователя: {user_choice}. Категория: {first_category}",
+            context_info=f"Результаты поиска по запросу пользователя: {normalized_query}. Категория: {first_category}",
             user_name=user.first_name
         )
         
-        deepseek_comment = format_deepseek_answer(deepseek_comment)
+        deepseek_comment = format_deepseek_answer(deepseek_comment) + query_note
         
         await update.message.reply_text(deepseek_comment, parse_mode='Markdown')
         
