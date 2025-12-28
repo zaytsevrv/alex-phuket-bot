@@ -1501,9 +1501,56 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
             reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
         )
         
-        return TOUR_DETAILS
+    elif user_choice == "✏️ Уточнить параметры":
+        # Возврат к уточнению параметров (то же, что "Изменить параметры")
+        await update.message.reply_text(
+            "Давайте уточним параметры поиска:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        # Показываем текущие данные и спрашиваем что изменить
+        current_data = context.user_data.get('user_data', {})
+        current_missing = check_missing_points(current_data)
+        await ask_for_clarification(update, context, current_data, current_missing)
+        return CONFIRMATION
 
-async def handle_clarification_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif user_choice == "📋 Только ознакомиться с морскими":
+        # Показываем морские экскурсии, несмотря на ограничения
+        category = "Море"
+        category_tours = [tour for tour in TOURS if tour.get("Для информации", "").strip() == "Море"]
+        
+        context.user_data['ranked_tours'] = category_tours
+        context.user_data['tour_offset'] = 0
+        
+        response = f"📋 *Морские экскурсии ({len(category_tours)} вариантов):*\n"
+        response += "⚠️ *Внимание:* Эти экскурсии не рекомендуются для вашей группы по медицинским показаниям\n\n"
+        
+        await update.message.reply_text(
+            response,
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        await update.message.reply_text(
+            "Выберите экскурсию для подробностей:",
+            reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
+        )
+        
+        return TOUR_DETAILS
+        # Показываем экскурсии из рекомендованных категорий (суша и шоу)
+        user_data = context.user_data.get('user_data', {})
+        
+        # Фильтруем все туры, исключая морские
+        all_tours = context.bot_data.get('tours', TOURS)
+        recommended_tours = [tour for tour in all_tours if tour.get("Для информации", "").strip() != "Море"]
+        
+        # Сохраняем отфильтрованные туры
+        context.user_data['category'] = "Рекомендованные (суша и шоу)"
+        context.user_data['filtered_tours'] = recommended_tours
+        
+        # Переходим к показу экскурсий
+        return await proceed_to_tours(update, context, user_data)
+
+    return CONFIRMATION
     """Обработчик уточняющих ответов пользователя"""
     user_text = update.message.text
 
@@ -1569,7 +1616,7 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     logger.log_action(user.id, "confirmed_data", stage=BOT_STAGES['data_collection'])
     context.user_data['last_action'] = 'data_confirmation'
     
-    if user_text in ["✅ Да, всё верно", "✏️ Нет, исправить"]:
+    if user_text in ["✅ Да, всё верно", "✏️ Нет, исправить", "🔄 Подобрать из рекомендованных", "🔄 Выбрать другую категорию", "✏️ Изменить параметры", "📋 Показать все", "✏️ Уточнить параметры", "📋 Только ознакомиться с морскими"]:
         return await handle_confirmation_choice(update, context)
     else:
         return await handle_clarification_response(update, context)
