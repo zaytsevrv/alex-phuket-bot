@@ -1505,7 +1505,7 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
             reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
         )
         
-    elif user_choice == "✏️ Уточнить параметры":
+        return TOUR_DETAILS
         # Возврат к уточнению параметров (то же, что "Изменить параметры")
         await update.message.reply_text(
             "Давайте уточним параметры поиска:",
