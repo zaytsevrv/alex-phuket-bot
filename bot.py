@@ -302,6 +302,59 @@ def is_likely_question(text):
     
     return False
 
+def format_deepseek_answer(text):
+    """
+    Красиво форматирует ответ DeepSeek для отправки в Telegram.
+    Добавляет разбиение на абзацы и улучшает визуальное восприятие.
+    """
+    if not text:
+        return text
+    
+    # Заменяем двойные точки на иконки для лучшего формата
+    text = text.replace('•', '▪️')
+    
+    # Если текст содержит точки - разбиваем на абзацы (каждое предложение на новую строку)
+    # но сохраняем список буллетов
+    sentences = text.split('. ')
+    if len(sentences) > 2:
+        # Есть несколько предложений - разделяем их
+        formatted_lines = []
+        for i, sentence in enumerate(sentences):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            # Добавляем точку обратно если её нет
+            if not sentence.endswith('.'):
+                sentence += '.'
+            formatted_lines.append(sentence)
+        
+        # Группируем по 2 предложения в абзац для лучшего восприятия
+        text = '\n\n'.join(formatted_lines)
+    
+    # Дополняем эмодзи в нужных местах для визуального интереса
+    emoji_replacements = {
+        'Пхи-Пхи': '🏝️ Пхи-Пхи',
+        'Симилан': '🌊 Симилан',
+        'тур': '🎫 тур',
+        'цена': '💰 цена',
+        'группа': '👥 группа',
+        'кораллы': '🪸 кораллы',
+        'дайвинг': '🤿 дайвинг',
+        'снорклинг': '🏊 снорклинг',
+        'пляж': '🏖️ пляж',
+        'рыба': '🐠 рыба',
+        'Юг': '⛵ Юг',
+        'Север': '🧭 Север',
+    }
+    
+    # Очень осторожно добавляем эмодзи чтобы не переделать всё
+    for key, emoji in emoji_replacements.items():
+        # Только если этот emoji ещё не добавлен
+        if key in text and emoji not in text:
+            text = text.replace(key, emoji, 1)  # Только первое вхождение
+    
+    return text
+
 def detect_location_category(text):
     """
     Определяет, спрашивает ли пользователь о конкретном месте.
@@ -1362,6 +1415,9 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_name=user.first_name
         )
         
+        # Красиво форматируем
+        location_answer = format_deepseek_answer(location_answer)
+        
         await update.message.reply_text(
             location_answer,
             parse_mode='Markdown'
@@ -1428,6 +1484,9 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context_info=context_info,
                 user_name=user.first_name
             )
+            
+            # Красиво форматируем ответ
+            deepseek_answer = format_deepseek_answer(deepseek_answer)
             
             # Отправляем ответ
             await update.message.reply_text(
@@ -2001,7 +2060,12 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_text in ["✅ Да, всё верно", "✏️ Нет, исправить", "🔄 Подобрать из рекомендованных", "🔄 Выбрать другую категорию", "✏️ Изменить параметры", "📋 Показать все", "✏️ Уточнить параметры", "📋 Только ознакомиться с морскими"]:
         return await handle_confirmation_choice(update, context)
     else:
-        return await handle_clarification_response(update, context)
+        # Если пользователь ответил что-то непонятное - просим выбрать из кнопок
+        await update.message.reply_text(
+            "🤔 Не совсем понял ваш ответ. Пожалуйста, выберите один из вариантов выше.",
+            reply_markup=make_confirmation_keyboard()
+        )
+        return CONFIRMATION
 
 async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data):
     """Переход к показу экскурсий после подтверждения всех данных"""
@@ -2746,8 +2810,12 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_name=update.effective_user.first_name
         )
 
+        # Красиво форматируем ответ
+        deepseek_answer = format_deepseek_answer(deepseek_answer)
+
         await update.message.reply_text(
             deepseek_answer,
+            parse_mode='Markdown',
             reply_markup=make_question_keyboard()
         )
         
