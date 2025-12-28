@@ -411,55 +411,6 @@ def search_tours_by_keywords(query):
     
     return results
 
-def detect_location_category(text):
-    """
-    Определяет, спрашивает ли пользователь о конкретном месте.
-    Возвращает кортеж (найдено_ли_место, название_места, рекомендуемая_категория)
-    """
-    text_lower = text.lower().strip()
-    
-    # Маппинг ключевых слов на РЕАЛЬНЫЕ категории из CSV
-    location_keywords = {
-        'Море (Острова)': [
-            'симилан', 'пхи пхи', 'краби', 'пангнга', 'джамс бонд', 
-            'рача', 'суринск', 'кай', 'остров', 'море', 'снорклинг',
-            'дайвинг', 'подводный', 'кораллы', 'рыба', 'пляж',
-            'катер', 'лодка', 'спидбот', 'катамаран', 'яхта', 'морской'
-        ],
-        'Суша (семейные)': [
-            'слон', 'слоны', 'слонами', 'слониха', 'животные', 'дельфин',
-            'аквапарк', 'аквариум', 'крокодил', 'птицы', 'парк птиц',
-            'семейн', 'детск', 'с детьми', 'бабуш'
-        ],
-        'Суша (активные)': [
-            'джунгли', 'рафтинг', 'каньон', 'водопад', 'река',
-            'лес', 'национальный парк', 'природа', 'каякинг', 'треккинг',
-            'плантация', 'тайский', 'деревня', 'культура', 'адреналин',
-            'активный', 'экстрим'
-        ],
-        'Суша (обзорные)': [
-            'аватар', 'обзорные', 'достопримечательности', 'храм', 'памятник',
-            'музей', 'святилище', 'буддийский', 'старый город', 'исторический',
-            'архитектура', 'буддизм', 'монах', 'религия', 'традиции',
-            'обзор', 'тур'
-        ],
-        'Рыбалка': [
-            'рыбалка', 'рыба', 'рыбалк', 'big game', 'лов рыб'
-        ],
-        'Вечерние Шоу': [
-            'шоу', 'вечер', 'ночной', 'развлечение', 'развлечений',
-            'calypso', 'simon', 'illusion'
-        ]
-    }
-    
-    # Ищем совпадения по ключевым словам
-    for category, keywords in location_keywords.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                return True, keyword, category
-    
-    return False, None, None
-
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВИЗУАЛА ===
 
 async def send_message_with_effect(update, text, reply_markup=None, parse_mode='Markdown', use_effect=True):
@@ -1460,74 +1411,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Получаем список допустимых категорий
     valid_categories = get_categories()
     
-    # НОВОЕ: Проверяем, спрашивает ли пользователь о конкретном МЕСТЕ (раньше чем вопрос)
-    found_location, location_keyword, recommended_category = detect_location_category(user_choice)
-    
-    if found_location and recommended_category in valid_categories:
-        # ✅ ЭТО ВОПРОС О МЕСТЕ - Показываем реальные туры из этой категории!
-        
-        # Показываем typing indicator
-        await update.effective_chat.send_chat_action(ChatAction.TYPING)
-        await asyncio.sleep(0.5)
-        
-        # Отправляем ответ DeepSeek об этом месте (кратко!)
-        location_answer = generate_deepseek_response(
-            user_query=f"Расскажи коротко (2-3 предложения) про {location_keyword}",
-            tour_data=None,
-            context_info=f"Пользователь интересуется местом: {location_keyword}",
-            user_name=user.first_name
-        )
-        
-        # Красиво форматируем
-        location_answer = format_deepseek_answer(location_answer)
-        
-        await update.message.reply_text(
-            location_answer,
-            parse_mode='Markdown'
-        )
-        
-        # Теперь показываем РЕАЛЬНЫЕ туры этой категории
-        context.user_data['selected_category'] = recommended_category
-        
-        # Фильтруем туры по категории
-        filtered_tours = [tour for tour in TOURS if tour.get('Для информации', '').strip() == recommended_category]
-        
-        if filtered_tours:
-            # Ранжируем туры по хитам и приоритетам
-            ranked_tours = rank_tours_by_hits_and_priorities(filtered_tours, context.user_data.get('user_data', {}))
-            context.user_data['ranked_tours'] = ranked_tours
-            context.user_data['tour_offset'] = 0
-            
-            # Показываем туры с разбором
-            await update.message.reply_text(
-                f"🎯 *Вот что я нашел для вас в категории '{recommended_category}':*",
-                parse_mode='Markdown'
-            )
-            
-            # Показываем первые 5 туров
-            await update.message.reply_text(
-                format_tours_group(ranked_tours[:5]),
-                parse_mode='Markdown',
-                reply_markup=make_tours_keyboard(ranked_tours, 0, 5)
-            )
-            
-            # === АНАЛИТИКА ===
-            track_user_session(context, BOT_STAGES['category_selection'], {'category': recommended_category, 'location_query': user_choice})
-            logger.log_action(user.id, "asked_about_location", stage=BOT_STAGES['category_selection'], query=user_choice, category=recommended_category)
-            context.user_data['last_action'] = 'location_question'
-            # === КОНЕЦ АНАЛИТИКИ ===
-            
-            return TOUR_DETAILS
-        else:
-            # Туры не найдены (странная ситуация)
-            await update.message.reply_text(
-                f"Жаль, но туры в этой категории сейчас недоступны. 😢\n\n"
-                "Выберите другую категорию:",
-                reply_markup=make_category_keyboard()
-            )
-            return CATEGORY
-    
-    # НОВОЕ: Проверяем, является ли это вопросом
+    # НОВОЕ: Проверяем, является ли это вопросом И пытаемся найти туры по ключевым словам
     if user_choice not in valid_categories:
         # Может быть это вопрос?
         if is_likely_question(user_choice):
