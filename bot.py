@@ -1,7 +1,8 @@
 import csv
 import logging
 import re
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, ChatAction
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -1115,7 +1116,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Я Алекс, ваш личный гид по сокровищам Пхукета от GoldenKeyTours.
 
-Я помогу превратить ваши "хочу" в незабываемые впечатления. Подскажите, о чём мечтаете?"""
+Я помогу превратить ваши "хочу" в незабываемые впечатления. Подскажите, о чём мечтаете?
+
+💡 *Совет:* Можете просто описать, что вам интересно, или выбрать категорию выше"""
     
     # Показываем typing indicator перед приветствием
     await update.effective_chat.send_chat_action(ChatAction.TYPING)
@@ -1747,7 +1750,9 @@ async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, u
     
     # Если экскурсии найдены - показываем их
     response = f"🎉 *Отлично! Нашёл {len(ranked_tours)} подходящих экскурсий в категории {category}*\n\n"
-    response += f"📋 *Топ-{min(3, len(ranked_tours))} лучших вариантов:*"
+    response += f"📋 *Топ-{min(3, len(ranked_tours))} лучших вариантов:*\n\n"
+    response += f"💡 *Совет:* Нажмите на экскурсию для подробного описания, цен и условий\n\n"
+    response += f"Выберите экскурсию для подробностей:"
     
     await update.message.reply_text(
         response,
@@ -1785,8 +1790,11 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         if tour_index < len(ranked_tours):
             tour = ranked_tours[tour_index]
             
+            # ДОБАВЛЯЕМ ПОДСКАЗКУ ПЕРЕД ОПИСАНИЕМ
+            tip_text = f"💡 *Совет:* Если у вас есть вопросы по экскурсии, просто спросите!\n\n"
+            
             # ИСПОЛЬЗУЕМ НОВОЕ ФОРМАТИРОВАНИЕ В СТИЛЕ АЛЕКСА
-            description = format_tour_description_alex_style(tour)
+            description = tip_text + format_tour_description_alex_style(tour)
             
             # Создаем кнопки для навигации
             keyboard = [
@@ -1960,7 +1968,7 @@ async def show_tours(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price_adult = tour.get("Цена Взр", "?")
         price_child = tour.get("Цена Дет", "?")
         response += f"{i+1}. *{name}*\n"
-        response += f"   Взрослый: {price_adult}฿, Детский: {price_child}฿\n\n"
+        response += f"   Взрослый: `{price_adult}฿`, Детский: `{price_child}฿`\n\n"
     
     response += f"Всего в базе: {len(TOURS)} экскурсий"
     await update.message.reply_text(response, parse_mode='Markdown')
@@ -2390,13 +2398,21 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         deepseek_answer = generate_deepseek_response(
             user_query=update.message.text,
             tour_data=tour_data,
-            context_info=context_info
+            context_info=context_info,
+            user_name=update.effective_user.first_name
         )
 
         await update.message.reply_text(
             deepseek_answer,
             reply_markup=make_question_keyboard()
         )
+        
+        # ДОБАВЛЯЕМ ПОДСКАЗКУ ПОСЛЕ ОТВЕТА
+        await update.message.reply_text(
+            "💡 *Совет:* Можете задать ещё вопросы или вернуться к выбору экскурсий",
+            parse_mode='Markdown'
+        )
+        
         return QUESTION
 
 def check_booking_requirements(user_data):
@@ -2700,7 +2716,7 @@ def parse_booking_info(text):
     return data
 
 # === ИНТЕГРАЦИЯ DEEPSEEK ===
-def generate_deepseek_response(user_query, tour_data=None, context_info=None):
+def generate_deepseek_response(user_query, tour_data=None, context_info=None, user_name=None):
     """
     Генерирует ответ с помощью DeepSeek V3.2.
     Использует только предоставленные данные из прайса.
@@ -2715,8 +2731,9 @@ def generate_deepseek_response(user_query, tour_data=None, context_info=None):
         )
 
         # Системный промпт для роли менеджера
-        system_prompt = """Ты - дружелюбный и профессиональный менеджер по экскурсиям в Phuket, Таиланд.
-        Твоя компания - GoldenKeyTours. Ты общаешься естественно, как живой человек, но строго придерживаешься фактов.
+        user_greeting = f"Ты общаешься с пользователем {user_name}." if user_name else "Ты общаешься с пользователем."
+        system_prompt = f"""Ты - дружелюбный и профессиональный менеджер по экскурсиям в Phuket, Таиланд.
+        Твоя компания - GoldenKeyTours. {user_greeting} Ты общаешься естественно, как живой человек, но строго придерживаешься фактов.
 
         ПРАВИЛА:
         - Используй ТОЛЬКО предоставленные данные о турах. Не придумывай новые экскурсии, цены или ссылки.
@@ -2727,9 +2744,10 @@ def generate_deepseek_response(user_query, tour_data=None, context_info=None):
         - Для беременных и детей учитывай ограничения по безопасности.
 
         СТИЛЬ ОБЩЕНИЯ:
+        - Обращайся к пользователю по имени {user_name} когда уместно
         - Естественный разговор: "Отличный выбор!", "Расскажу подробнее...", "Давайте я помогу вам выбрать"
         - Кратко, но информативно - не болтай лишнего
-        - Используй эмодзи умеренно для дружелюбия: 🌊 для моря, 🏖️ для пляжа, 👨‍👩‍👧‍👦 для семьи
+        - Используй эмодзи умеренно для дружелюбия: 🌊 для моря, 🏖️ для пляжа, 👨‍👩‍👧‍👦 для семьи, 🎭 для шоу, 🎣 для рыбалки
         - Иногда добавляй легкие шутки или иронию, но не переусердствуй: "Погода в Phuket - это как русская зима, только наоборот! ☀️"
         - Будь позитивным и энергичным, как настоящий тайский гид
         - Используй разговорные фразы: "С удовольствием расскажу!", "Отличная идея!", "Давайте посмотрим варианты"
