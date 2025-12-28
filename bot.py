@@ -20,6 +20,10 @@ from config import ADMIN_ID, BOT_STAGES, QUESTION_TYPES, ERROR_TYPES
 import json
 # === КОНЕЦ ИМПОРТОВ АНАЛИТИКИ ===
 
+# === ИМПОРТ ФУНКЦИЙ ПАРСЕРА ===
+from parser_functions import parse_user_response, age_to_months, format_age_months
+# === КОНЕЦ ИМПОРТОВ ПАРСЕРА ===
+
 # === НАЧАЛО БЕЗОПАСНОЙ ЗАГРУЗКИ ТОКЕНА ===
 import os
 from dotenv import load_dotenv
@@ -1059,258 +1063,6 @@ def make_tours_keyboard(tours, offset=0, limit=5, show_question_button=True):
     
     return InlineKeyboardMarkup(keyboard)
 
-# ==================== АНАЛИЗ ОТВЕТОВ ПОЛЬЗОВАТЕЛЯ ====================
-def parse_user_response(text):
-    """
-    Улучшенный анализатор ответов. Извлекает смысл из свободного текста.
-    """
-    text_lower = text.lower()
-    
-    data = {
-        'adults': 0,
-        'children': [],        # возрасты в месяцах
-        'children_original': [], # оригинальный текст возраста
-        'pregnant': None,      # None = не указано
-        'priorities': [],
-        'health_issues': [],
-        'raw_text': text
-    }
-    
-    missing_points = []
-    
-    # ========== 1. СЛОВАРЬ ДЛЯ ПОИСКА ЧИСЛИТЕЛЬНЫХ ==========
-    number_words = {
-        'один': 1, 'одного': 1, 'одной': 1,
-        'два': 2, 'двое': 2, 'двух': 2,
-        'три': 3, 'трое': 3, 'трёх': 3, 'трех': 3,
-        'четыре': 4, 'четверо': 4, 'четырех': 4, 'четырёх': 4,
-        'пять': 5, 'пятеро': 5,
-        'шесть': 6, 'шестеро': 6,
-        'семь': 7, 'семеро': 7,
-        'восемь': 8, 'восьмеро': 8,
-        'девять': 9, 'девятеро': 9,
-        'десять': 10
-    }
-    
-    # ========== 2. НАХОДИМ ВСЕ ЧИСЛА И ЧИСЛИТЕЛЬНЫЕ В ТЕКСТЕ ==========
-    all_numbers = []
-    
-    # 2A. Ищем цифры (например, "5 лет")
-    digit_pattern = r'(\d+)(?:\s|$)'
-    for match in re.finditer(digit_pattern, text_lower):
-        num = int(match.group(1))
-        position = match.start()
-        # Запоминаем число и его позицию в тексте
-        all_numbers.append({'value': num, 'pos': position, 'type': 'digit'})
-    
-    # 2B. Ищем числительные (например, "двое взрослых")
-    for word, num in number_words.items():
-        pos = text_lower.find(word)
-        if pos != -1:
-            all_numbers.append({'value': num, 'pos': pos, 'type': 'word', 'word': word})
-    
-    # Сортируем числа по их позиции в тексте (как они идут)
-    all_numbers.sort(key=lambda x: x['pos'])
-    
-    # ========== 3. ОПРЕДЕЛЯЕМ, ЧТО ЗНАЧИТ КАЖДОЕ ЧИСЛО ==========
-    words = text_lower.split()
-    
-    for num_info in all_numbers:
-        num = num_info['value']
-        pos = num_info['pos']
-        
-        # Находим слово, которое стоит ПЕРЕД числом (контекст слева)
-        left_context = ""
-        if pos > 0:
-            # Берем часть текста ДО числа и берем последнее слово оттуда
-            text_before = text_lower[:pos]
-            if text_before.strip():
-                left_words = text_before.split()
-                if left_words:
-                    left_context = left_words[-1]
-        
-        # Находим слово, которое стоит ПОСЛЕ числа (контекст справа)
-        right_context = ""
-        text_after = text_lower[pos + len(str(num)):] if num_info['type'] == 'digit' else text_lower[pos + len(num_info['word']):]
-        if text_after.strip():
-            right_words = text_after.split()
-            if right_words:
-                right_context = right_words[0]
-        
-        # Анализируем контекст
-        # 3A. Если контекст говорит, что это ВЗРОСЛЫЙ
-        if ('взросл' in left_context or 'взросл' in right_context or
-            'взр' in left_context or 'взр' in right_context):
-            if data['adults'] == 0:  # берем только первое найденное количество
-                data['adults'] = num
-        
-        # 3B. Если контекст говорит, что это РЕБЕНОК или возраст
-        elif ('ребен' in left_context or 'ребен' in right_context or
-              'дет' in left_context or 'дет' in right_context or
-              'лет' in right_context or 'год' in right_context or 'г.' in right_context or
-              'мес' in right_context or 'месяц' in right_context):
-            
-            # === УЛУЧШЕННАЯ ЛОГИКА: АНАЛИЗИРУЕМ ФРАЗУ ЦЕЛИКОМ ===
-            # Берем фрагмент текста вокруг числа (примерно 10 слов)
-            word_list = text_lower.split()
-            try:
-                # Находим индекс текущего слова (числа или числительного)
-                current_word = str(num) if num_info['type'] == 'digit' else num_info['word']
-                idx = -1
-                for i, word in enumerate(word_list):
-                    if word == current_word or (word.isdigit() and int(word) == num):
-                        idx = i
-                        break
-                
-                if idx != -1:
-                    # Берем достаточно большой контекст для анализа
-                    start = max(0, idx - 5)
-                    end = min(len(word_list), idx + 6)
-                    context_phrase = ' '.join(word_list[start:end])
-                    
-                    # СНАЧАЛА проверяем, не комбинированный ли это возраст
-                    # Ищем паттерн "X лет/год(а) и Y месяцев" ВО ВСЕЙ фразе
-                    age_match = re.search(r'(\d+)\s*(?:лет|год[а]?|г\.?)\s*(?:и\s*)?(\d+)?\s*(?:месяц[а-я]*|мес\.?)', context_phrase)
-                    
-                    if age_match:
-                        # Это комбинированный возраст ВО ВСЕЙ ФРАЗЕ
-                        years = int(age_match.group(1))
-                        months = int(age_match.group(2)) if age_match.group(2) else 0
-                        total_months = years * 12 + months
-                        
-                        # Добавляем только если еще не добавляли этот возраст
-                        if total_months not in data['children']:
-                            data['children'].append(total_months)
-                            # Форматируем для отображения
-                            if months == 0:
-                                age_text = f"{years} год{'а' if years == 1 else 'а' if 2 <= years <= 4 else ''}"
-                            else:
-                                age_text = f"{years} год{'а' if years == 1 else 'а' if 2 <= years <= 4 else ''} и {months} месяц{'а' if months == 1 else 'ев' if 2 <= months <= 4 else 'ев'}"
-                            data['children_original'].append(age_text)
-                    
-                    # ЕСЛИ НЕ комбинированный - проверяем обычные варианты
-                    else:
-                        # Вариант 1: Возраст в годах ("5 лет", "1 год")
-                        if any(age_word in right_context for age_word in ['лет', 'год', 'г.']):
-                            months = age_to_months(f"{num} лет")
-                            if months > 0 and months not in data['children']:
-                                data['children'].append(months)
-                                data['children_original'].append(f"{num}")
-                        
-                        # Вариант 2: Возраст в месяцах ("6 месяцев")
-                        elif 'месяц' in right_context or 'мес' in right_context:
-                            months = num  # "6 месяцев" = 6 месяцев
-                            if months > 0 and months < 12 and months not in data['children']:
-                                data['children'].append(months)
-                                data['children_original'].append(f"{num} мес.")
-                        
-                        # Вариант 3: Особые указания "до 1 года"
-                        text_around = text_lower[max(0, pos-10):min(len(text_lower), pos+15)]
-                        if ('до' in text_around and ('год' in text_around or '1' in text_around)) or \
-                           ('менее' in text_around and 'год' in text_around) or \
-                           ('меньше' in text_around and 'год' in text_around):
-                            if 11 not in data['children']:  # 11 месяцев как маркер "до года"
-                                data['children'].append(11)
-                                data['children_original'].append('до 1 года')
-                        
-                        # Вариант 4: Если число стоит рядом с "ребенок"/"дети", но без указания возраста
-                        elif ('ребен' in left_context or 'ребен' in right_context or
-                              'дет' in left_context or 'дет' in right_context):
-                            if num < 18 and 0 not in data['children']:  # 0 = возраст не указан
-                                data['children'].append(0)
-                                data['children_original'].append('количество')
-            except Exception as e:
-                print(f"Ошибка парсинга возраста: {e}")
-                # Запасной вариант
-                if any(age_word in right_context for age_word in ['лет', 'год', 'г.']):
-                    months = age_to_months(f"{num} лет")
-                    if months > 0:
-                        data['children'].append(months)
-                        data['children_original'].append(f"{num}")
-    
-    # ========== 5. ПОИСК БЕРЕМЕННОСТИ, ПРИОРИТЕТОВ И ЗДОРОВЬЯ ==========
-    # (Эти блоки остаются почти как были, они работают хорошо)
-    pregnant_keywords = ['беременн', 'в положении', 'жду ребёнка', 'жду ребенка']
-    not_pregnant_keywords = ['не беременн', 'нет беременн', 'не в положении']
-    
-    pregnant_mentioned = False
-    for keyword in not_pregnant_keywords:
-        if keyword in text_lower:
-            data['pregnant'] = False
-            pregnant_mentioned = True
-            break
-    
-    if not pregnant_mentioned:
-        for keyword in pregnant_keywords:
-            if keyword in text_lower:
-                data['pregnant'] = True
-                pregnant_mentioned = True
-                break
-    
-    # Приоритеты
-    priority_keywords = {
-        'комфорт': ['комфорт', 'удобств', 'плавн', 'мягк'],
-        'бюджет': ['бюджет', 'дешев', 'эконом', 'недорог'],
-        'фотографии': ['фото', 'сним', 'инстаграм', 'красив'],
-        'не рано вставать': ['не рано', 'поспать', 'поздн', 'не люблю рано', 'не хочу рано'],
-    }
-    
-    for priority, keywords in priority_keywords.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                if priority not in data['priorities']:
-                    data['priorities'].append(priority)
-                break
-    
-    # Проблемы со здоровьем
-    health_keywords = {
-        'спина': ['спин', 'поясниц'],
-        'укачивание': ['укачиван', 'морск', 'тошн'],
-        'ходьба': ['ходьб', 'ходить трудн', 'ноги болят'],
-    }
-    
-    for issue, keywords in health_keywords.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                if issue not in data['health_issues']:
-                    data['health_issues'].append(issue)
-                break
-    
-    # ========== 6. ПРОВЕРКА, ЧТО ПРОПУЩЕНО ==========
-    if data['adults'] == 0:
-        missing_points.append("количество взрослых")
-    
-    if data['pregnant'] is None:
-        missing_points.append("беременность (да/нет)")
-    
-    # Проверяем информацию о детях
-    if any('ребен' in word or 'дет' in word for word in words):
-        # Если упомянули детей, но возрастов нет и не написали "без детей"
-        if not data['children'] and 'без детей' not in text_lower and 'нет детей' not in text_lower:
-            missing_points.append("информация о детях")
-    elif data['adults'] > 0:
-        # Если взрослые есть, но о детях ничего не сказано — спрашиваем
-        missing_points.append("информация о детях")
-
-    # ========== 7. УДАЛЯЕМ ДУБЛИКАТЫ ВОЗРАСТОВ ==========
-    # Если есть и конкретные возрасты, и маркер "количество" (0) - удаляем маркер
-    if 0 in data['children'] and len(data['children']) > 1:
-        data['children'] = [age for age in data['children'] if age != 0]
-        data['children_original'] = [age for age in data['children_original'] if age != 'количество']
-    
-    # Удаляем дубликаты (если один и тот же возраст попал несколько раз)
-    unique_ages = []
-    unique_originals = []
-    for age, original in zip(data['children'], data['children_original']):
-        if age not in unique_ages:
-            unique_ages.append(age)
-            unique_originals.append(original)
-    
-    data['children'] = unique_ages
-    data['children_original'] = unique_originals
-    
-    return data, missing_points
-
 # ==================== ФУНКЦИИ АНАЛИТИКИ ====================
 def track_user_session(context, stage, additional_data=None):
     """Отслеживает сессию пользователя для анализа уходов"""
@@ -2061,13 +1813,38 @@ async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'user_data' not in context.user_data:
         await update.message.reply_text("❌ Нет данных о пользователе")
         return
-    
+
     user_data = context.user_data['user_data']
-    
+
     response = "🔧 *Отладочная информация:*\n\n"
     response += f"*Взрослые:* {user_data.get('adults', 0)}\n"
 
-# ==================== КОМАНДА СТАТИСТИКИ ====================
+    if user_data.get('children'):
+        children_count = len(user_data['children'])
+        age_texts = [format_age_months(months) for months in user_data['children']]
+
+        if children_count == 1:
+            children_text = "1 ребенок"
+        elif children_count in [2, 3, 4]:
+            children_text = f"{children_count} ребенка"
+        else:
+            children_text = f"{children_count} детей"
+
+        response += f"*Дети:* {children_text} ({', '.join(age_texts)})\n"
+    else:
+        response += "*Дети:* Нет\n"
+
+    response += f"*Беременность:* {'Да' if user_data.get('pregnant') else 'Нет'}\n"
+
+    if user_data.get('priorities'):
+        response += f"*Приоритеты:* {', '.join(user_data['priorities'])}\n"
+
+    if user_data.get('health_issues'):
+        response += f"*Проблемы со здоровьем:* {', '.join(user_data['health_issues'])}\n"
+
+    response += f"\n*Сырой текст:* {user_data.get('raw_text', 'N/A')}"
+
+    await update.message.reply_text(response, parse_mode='Markdown')
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать расширенную статистику бота с аналитикой - ТОЛЬКО ДЛЯ АДМИНОВ"""
     user_id = update.effective_user.id
@@ -2098,8 +1875,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         response += "📈 КОНВЕРСИЯ ПО ЭТАПАМ:\n"
         response += f"• /start: {started_bot} пользователей\n"
-        response += f"• Выбор категории: {chose_category} ({chose_category/started_bot*100:.1f}% от стартов)\n"
-        response += f"• Просмотр экскурсий: {viewed_tour} ({viewed_tour/started_bot*100:.1f}% от стартов)\n\n"
+        response += f"• Выбор категории: {chose_category} ({(chose_category/started_bot*100 if started_bot > 0 else 0):.1f}% от стартов)\n"
+        response += f"• Просмотр экскурсий: {viewed_tour} ({(viewed_tour/started_bot*100 if started_bot > 0 else 0):.1f}% от стартов)\n\n"
         
         # 2. ТОЧКИ УХОДА (DROP-OFFS)
         cursor.execute('''
