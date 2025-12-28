@@ -2678,7 +2678,7 @@ def generate_deepseek_response(user_query, tour_data=None, context_info=None):
     try:
         client = openai.OpenAI(
             api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com"  # Предполагаемый endpoint для DeepSeek
+            base_url="https://api.deepseek.com/v1"  # Официальный endpoint DeepSeek
         )
 
         # Системный промпт для роли менеджера
@@ -2729,7 +2729,7 @@ def generate_deepseek_response(user_query, tour_data=None, context_info=None):
         ]
 
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Предполагаемая модель DeepSeek V3.2
+            model="deepseek-chat",  # DeepSeek V3.2 Chat - самая живая и общительная модель
             messages=messages,
             max_tokens=1000,
             temperature=0.7
