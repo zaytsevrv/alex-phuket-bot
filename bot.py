@@ -1,7 +1,7 @@
 import csv
 import logging
 import re
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup, ChatAction
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 import sqlite3
 from datetime import datetime
+import asyncio
 
 # === АНАЛИТИКА ===
 from analytics.logger import logger
@@ -1116,6 +1117,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Я помогу превратить ваши "хочу" в незабываемые впечатления. Подскажите, о чём мечтаете?"""
     
+    # Показываем typing indicator перед приветствием
+    await update.effective_chat.send_chat_action(ChatAction.TYPING)
+    await asyncio.sleep(0.5)
+    
     await update.message.reply_text(
         welcome_text,
         reply_markup=make_category_keyboard()
@@ -1684,6 +1689,11 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data):
     """Переход к показу экскурсий после подтверждения всех данных"""
+    
+    # Показываем typing indicator - бот ищет экскурсии
+    await update.effective_chat.send_chat_action(ChatAction.TYPING)
+    await asyncio.sleep(1)  # Имитируем поиск
+    
     category = context.user_data.get('category', 'неизвестно')
     category_tours = context.user_data.get('filtered_tours', [])
     
@@ -2371,6 +2381,10 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context_info += f", {len(user_data['children'])} детей"
         if user_data.get('pregnant'):
             context_info += ", беременная"
+
+        # Показываем typing indicator - бот "думает"
+        await update.effective_chat.send_chat_action(ChatAction.TYPING)
+        await asyncio.sleep(1.5)  # Даем время на "размышление"
 
         # Генерируем ответ с DeepSeek
         deepseek_answer = generate_deepseek_response(
