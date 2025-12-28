@@ -1291,13 +1291,20 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_choice = update.message.text
     user = update.effective_user
     
-    # === ЭФФЕКТ САЛЮТА И ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
+    # === ЭФФЕКТ САЛЮТА И АНИМИРОВАННЫХ ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
     try:
         # 1. Салют (эффект доставки)
         await update.message.set_reaction(emoji="🎉")
         await asyncio.sleep(1)
         
-        # 2. Глаза (бот читает сообщение)
+        # 2. Анимированные глаза (движение зрачков)
+        for _ in range(3):  # 3 цикла движения
+            await update.message.set_reaction(emoji="👀")
+            await asyncio.sleep(0.2)
+            await update.message.set_reaction(emoji="🤨")
+            await asyncio.sleep(0.2)
+        
+        # Оставляем глаза открытыми
         await update.message.set_reaction(emoji="👀")
     except Exception as e:
         print(f"⚠️ Не удалось установить реакцию: {e}")
@@ -2529,13 +2536,20 @@ FAQ_ANSWERS = {
 
 async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-# === ЭФФЕКТ САЛЮТА И ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
+# === ЭФФЕКТ САЛЮТА И АНИМИРОВАННЫХ ГЛАЗ НА СООБЩЕНИИ КЛИЕНТА ===
     try:
         # 1. Салют (эффект доставки)
         await update.message.set_reaction(emoji="🎉")
         await asyncio.sleep(1)
         
-        # 2. Глаза (бот читает сообщение)
+        # 2. Анимированные глаза (движение зрачков)
+        for _ in range(3):  # 3 цикла движения
+            await update.message.set_reaction(emoji="👀")
+            await asyncio.sleep(0.2)
+            await update.message.set_reaction(emoji="🤨")
+            await asyncio.sleep(0.2)
+        
+        # Оставляем глаза открытыми
         await update.message.set_reaction(emoji="👀")
     except Exception as e:
         print(f"⚠️ Не удалось установить реакцию: {e}")
