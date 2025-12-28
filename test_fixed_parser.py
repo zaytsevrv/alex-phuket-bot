@@ -158,7 +158,7 @@ def test_tour_filtering():
         print(f"{i}. {tour.get('Название', 'Без названия')}")
 
     # Проверяем, что морские туры исключены
-    sea_tours = [t for t in filtered_tours if 'море' in t.get('Теги (Безопасность)', '').lower() or 'морск' in t.get('Теги (Безопасность)', '').lower()]
+    sea_tours = [t for t in filtered_tours if 'море' in t.get('Для информации', '').lower() or 'острова' in t.get('Для информации', '').lower() or 'рыбалка' in t.get('Для информации', '').lower() or 'яхты' in t.get('Для информации', '').lower() or 'катера' in t.get('Для информации', '').lower()]
     print(f"\nМорских туров в результате: {len(sea_tours)} (должно быть 0)")
 
 if __name__ == "__main__":

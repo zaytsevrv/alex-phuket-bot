@@ -53,7 +53,7 @@ DB_FILE = "bot_statistics.db"
 CSV_FILE = "Price22.12.2025.csv"
 
 # Состояния диалога (шаги)
-CATEGORY, QUALIFICATION, CONFIRMATION, TOUR_DETAILS, QUESTION = range(5)
+CATEGORY, QUALIFICATION, CONFIRMATION, TOUR_DETAILS, QUESTION, BOOKING = range(6)
 
 # Включим логирование для отладки
 logging.basicConfig(
@@ -1725,6 +1725,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
             keyboard = [
                 [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_{tour_index}")],
                 [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
+                [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_{tour_index}")],
                 [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")],
                 [InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")]
             ]
@@ -1800,6 +1801,37 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=make_question_keyboard()
         )
         return QUESTION
+    
+    elif callback_data.startswith("book_"):
+        # Пользователь хочет забронировать экскурсию
+        tour_index = int(callback_data.split("_")[1])
+        ranked_tours = context.user_data.get('ranked_tours', [])
+        
+        if tour_index < len(ranked_tours):
+            tour = ranked_tours[tour_index]
+            user_data = context.user_data.get('user_data', {})
+            
+            # Сохраняем выбранный тур для бронирования
+            context.user_data['booking_tour'] = tour
+            context.user_data['booking_tour_index'] = tour_index
+            
+            # Проверяем, есть ли необходимые данные для бронирования
+            missing_info = check_booking_requirements(user_data)
+            
+            if missing_info:
+                # Запрашиваем недостающую информацию
+                await query.message.reply_text(
+                    f"💳 *Бронирование экскурсии: {tour.get('Название', 'Без названия')}*\n\n"
+                    f"📝 *Необходимо уточнить:*\n{missing_info}\n\n"
+                    "Пожалуйста, укажите эту информацию:",
+                    parse_mode='Markdown',
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                return BOOKING
+            else:
+                # Все данные есть - подтверждаем бронирование
+                await confirm_booking(query, context, tour, user_data)
+                return BOOKING
     
     return TOUR_DETAILS
 
@@ -2296,6 +2328,225 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return QUESTION
 
+# ==================== ФУНКЦИИ БРОНИРОВАНИЯ ====================
+
+def check_booking_requirements(user_data):
+    """Проверяет, есть ли все необходимые данные для бронирования"""
+    missing = []
+    
+    if not user_data.get('hotel'):
+        missing.append("🏨 *Название отеля* (обязательно для транспорта)")
+    
+    if not user_data.get('phone'):
+        missing.append("📱 *Номер телефона*")
+    
+    # Дата не обязательна, но желательна
+    # if not user_data.get('booking_date'):
+    #     missing.append("📅 *Желаемая дата*")
+    
+    return "\n".join(f"• {item}" for item in missing)
+
+async def confirm_booking(query, context, tour, user_data):
+    """Подтверждает бронирование и отправляет менеджеру"""
+    user = query.from_user
+    
+    # Формируем сводку для менеджера
+    manager_message = format_booking_summary(user, tour, user_data)
+    
+    # Отправляем менеджеру
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=manager_message,
+            parse_mode='Markdown'
+        )
+        
+        # Подтверждаем пользователю
+        await query.message.reply_text(
+            "✅ *Бронирование отправлено менеджеру!*\n\n"
+            "📞 Менеджер свяжется с вами в ближайшее время для подтверждения деталей.\n\n"
+            "🤝 Спасибо за выбор GoldenKeyTours!",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardMarkup([["🔄 Выбрать другую экскурсию"], ["/start"]], resize_keyboard=True)
+        )
+        
+        # Логируем бронирование
+        logger.log_action(user.id, "booking_completed", tour_id=tour.get('ID'), category=context.user_data.get('category'))
+        
+    except Exception as e:
+        await query.message.reply_text(
+            "❌ *Ошибка при отправке бронирования*\n\n"
+            "Попробуйте позже или свяжитесь с менеджером напрямую.",
+            parse_mode='Markdown'
+        )
+        print(f"Ошибка отправки бронирования: {e}")
+
+def format_booking_summary(user, tour, user_data):
+    """Форматирует сводку бронирования для менеджера"""
+    # Имя клиента
+    client_name = user_data.get('name') or user.first_name or "Не указано"
+    
+    # Состав группы
+    adults = user_data.get('adults', 0)
+    children_info = []
+    if user_data.get('children'):
+        for age_months in user_data['children']:
+            age_str = format_age_months(age_months)
+            children_info.append(age_str)
+    
+    children_text = f"{len(children_info)} ({', '.join(children_info)})" if children_info else "нет"
+    
+    pregnancy = "да" if user_data.get('pregnant') else "нет"
+    
+    # Экскурсия
+    tour_name = tour.get('Название', 'Без названия')
+    
+    # Дата
+    booking_date = user_data.get('booking_date', 'Не указана')
+    
+    # Отель
+    hotel = user_data.get('hotel', 'Не указан')
+    
+    # Телефон
+    phone = user_data.get('phone', 'Не указан')
+    
+    summary = f"""💳 *НОВОЕ БРОНИРОВАНИЕ*
+
+👤 *Клиент:* {client_name} (Telegram: @{user.username or 'нет'})
+📞 *Телефон:* {phone}
+
+👥 *Состав группы:*
+• Взрослых: {adults}
+• Детей: {children_text}
+• Беременность: {pregnancy}
+
+🎯 *Экскурсия:* {tour_name}
+📅 *Желаемая дата:* {booking_date}
+🏨 *Отель:* {hotel}
+
+💰 *Цены:*
+• Взрослый: {tour.get('Цена Взр', '?')} THB
+• Детский: {tour.get('Цена Дет', '?')} THB
+
+🔗 *Ссылка:* {tour.get('Ссылка', 'Нет')}
+
+⚠️ *Важная информация:* {tour.get('Важная информация', 'Нет')}"""
+    
+    return summary
+
+async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает ввод данных для бронирования"""
+    user_text = update.message.text
+    user_data = context.user_data.get('user_data', {})
+    tour = context.user_data.get('booking_tour')
+    
+    # === АНАЛИТИКА ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['booking'])
+    logger.log_action(user.id, "booking_input", stage=BOT_STAGES['booking'])
+    context.user_data['last_action'] = 'booking_input'
+    # === КОНЕЦ АНАЛИТИКИ ===
+    
+    # Парсим введенные данные
+    parsed_data = parse_booking_info(user_text)
+    
+    # Обновляем user_data
+    user_data.update(parsed_data)
+    context.user_data['user_data'] = user_data
+    
+    # Проверяем, все ли собрали
+    missing_info = check_booking_requirements(user_data)
+    
+    if missing_info:
+        await update.message.reply_text(
+            f"📝 *Ещё необходимо:*\n{missing_info}\n\n"
+            "Пожалуйста, укажите:",
+            parse_mode='Markdown'
+        )
+        return BOOKING
+    else:
+        # Все данные есть - подтверждаем
+        await confirm_booking_via_message(update, context, tour, user_data)
+        return ConversationHandler.END
+
+def parse_booking_info(text):
+    """Парсит информацию для бронирования из текста"""
+    data = {}
+    text_lower = text.lower()
+    
+    # Ищем отель
+    hotel_keywords = ['отель', 'гостиница', 'hotel', 'resort']
+    for keyword in hotel_keywords:
+        if keyword in text_lower:
+            # Простой парсинг - берем текст после ключевого слова
+            parts = text_lower.split(keyword, 1)
+            if len(parts) > 1:
+                hotel = parts[1].strip()
+                # Очищаем от лишнего
+                hotel = hotel.split('\n')[0].split(',')[0].strip()
+                if hotel:
+                    data['hotel'] = hotel.title()
+                    break
+    
+    # Ищем телефон
+    import re
+    phone_match = re.search(r'(\+?[\d\s\-\(\)]{7,})', text)
+    if phone_match:
+        data['phone'] = phone_match.group(1).strip()
+    
+    # Ищем дату (простой поиск)
+    date_keywords = ['дата', 'число', 'date']
+    for keyword in date_keywords:
+        if keyword in text_lower:
+            # Ищем паттерны дат
+            date_patterns = [
+                r'(\d{1,2}[\.\-\/]\d{1,2}[\.\-\/]\d{2,4})',  # 25.12.2025
+                r'(\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+\d{4})'  # 25 декабря 2025
+            ]
+            for pattern in date_patterns:
+                match = re.search(pattern, text_lower)
+                if match:
+                    data['booking_date'] = match.group(1)
+                    break
+            break
+    
+    return data
+
+async def confirm_booking_via_message(update, context, tour, user_data):
+    """Подтверждает бронирование через обычное сообщение (не callback)"""
+    user = update.effective_user
+    
+    # Формируем сводку для менеджера
+    manager_message = format_booking_summary(user, tour, user_data)
+    
+    # Отправляем менеджеру
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=manager_message,
+            parse_mode='Markdown'
+        )
+        
+        # Подтверждаем пользователю
+        await update.message.reply_text(
+            "✅ *Бронирование отправлено менеджеру!*\n\n"
+            "📞 Менеджер свяжется с вами в ближайшее время для подтверждения деталей.\n\n"
+            "🤝 Спасибо за выбор GoldenKeyTours!",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardMarkup([["🔄 Выбрать другую экскурсию"], ["/start"]], resize_keyboard=True)
+        )
+        
+        # Логируем бронирование
+        logger.log_action(user.id, "booking_completed", tour_id=tour.get('ID'), category=context.user_data.get('category'))
+        
+    except Exception as e:
+        await update.message.reply_text(
+            "❌ *Ошибка при отправке бронирования*\n\n"
+            "Попробуйте позже или свяжитесь с менеджером напрямую.",
+            parse_mode='Markdown'
+        )
+        print(f"Ошибка отправки бронирования: {e}")
+
 # ==================== ЗАПУСК БОТА ====================
 def main():
     """Запуск бота"""
@@ -2337,6 +2588,9 @@ def main():
             ],
             QUESTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question)
+            ],
+            BOOKING: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_booking_input)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
