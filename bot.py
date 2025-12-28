@@ -412,22 +412,89 @@ def search_tours_by_keywords(query):
     return results
 
 # ==================== ГИБРИДНЫЙ ПОИСК С НОРМАЛИЗАЦИЕЙ ====================
+def get_lemma_variants(word):
+    """
+    Возвращает возможные морфологические варианты слова для поиска.
+    Простая лемматизация без использования pymorphy2.
+    """
+    variants = {word}  # Добавляем исходное слово
+    
+    # Словарь известных мор-вариантов для туризма
+    lemma_dict = {
+        'слон': ['слон', 'слона', 'слонов', 'слонам', 'слонами', 'слонах'],
+        'черепа': ['черепаха', 'черепахи', 'черепаху', 'черепахой', 'черепах', 'черепаховая', 'черепаховой'],
+        'дельфин': ['дельфин', 'дельфина', 'дельфинов', 'дельфинам'],
+        'остров': ['остров', 'острова', 'островов', 'островам'],
+        'пещер': ['пещер', 'пещера', 'пещеры', 'пещерах'],
+        'рафтинг': ['рафтинг', 'рафтинга', 'рафтингом'],
+        'аквапарк': ['аквапарк', 'аквапарка', 'аквапарков'],
+        'каток': ['каток', 'катка', 'катков', 'катке'],
+        'храм': ['храм', 'храма', 'храмов', 'храме'],
+        'монастырь': ['монастырь', 'монастыря', 'монастырей'],
+        'водопад': ['водопад', 'водопада', 'водопадов'],
+    }
+    
+    # Проверяем есть ли слово в словаре
+    for base, variants_list in lemma_dict.items():
+        if word in variants_list:
+            # Добавляем все варианты этого слова
+            variants.update(variants_list)
+            break
+    
+    # Для других слов пытаемся удалить окончания
+    if len(word) > 4:
+        # Удаляем окончания -ов, -ов/-ов, -ах, -ой
+        if word.endswith(('ов', 'ов', 'ах', 'ой')):
+            base = word[:-2]
+            variants.add(base)
+            variants.add(base + 'а')
+    
+    return list(variants)
+
 def search_tours_by_keywords_hybrid(query):
     """
-    ГИБРИДНЫЙ ПОИСК с нормализацией:
+    ГИБРИДНЫЙ ПОИСК с нормализацией и лемматизацией:
     1. Точный поиск (как раньше)
-    2. Размытый поиск (difflib) если точный не дал результатов
-    3. Если всё равно ничего - возвращает пусто для DeepSeek
+    2. Поиск в отдельных словах фразы (для "хочу увидеть слонов")
+       - Лемматизация слов (слон/слонов/слонам)
+       - Отсеиваем стоп-слова типа "хочу", "давайте", "укажите"
+    3. Размытый поиск (difflib) если точный не дал результатов
+    4. Если всё равно ничего - возвращает пусто для DeepSeek
     """
     from difflib import get_close_matches
     
-    # Шаг 1: Точный поиск
+    # Шаг 1: Точный поиск по всей фразе
     results = search_tours_by_keywords(query)
     if results:
-        return results, query  # Возвращаем результаты и оригинальный запрос
+        return results, query
     
-    # Шаг 2: Размытый поиск (для опечаток и словоформ)
-    # Собираем все поля для поиска
+    # Шаг 2: Поиск в отдельных словах фразы (с отсеиванием стоп-слов и лемматизацией)
+    words = query.lower().split()
+    
+    # Стоп-слова которые не помогают в поиске туров
+    stop_words = {'хочу', 'давайте', 'укажите', 'ответьте', 'посоветуйте',
+                  'что', 'как', 'где', 'когда', 'приложить', 'пожалуйста',
+                  'буду', 'нужна', 'нужны', 'можно', 'есть', 'все', 'если',
+                  'про', 'рассказать', 'ищу', 'посмотреть', 'увидеть', 'видеть',
+                  'показать', 'узнать', 'расскажи'}
+    
+    # Сортируем слова по длине (longer = более специфичные)
+    # и отсеиваем стоп-слова
+    content_words = [w for w in words if len(w) > 3 and w not in stop_words]
+    content_words.sort(key=len, reverse=True)  # Сначала длинные слова
+    
+    # Пытаемся искать каждое слово и его варианты
+    for word in content_words:
+        # Получаем варианты слова (лемматизация)
+        lemma_variants = get_lemma_variants(word)
+        
+        # Ищем по всем вариантам
+        for variant in lemma_variants:
+            results = search_tours_by_keywords(variant)
+            if results:
+                return results, word  # Возвращаем с исходным словом
+    
+    # Шаг 3: Размытый поиск (для опечаток и словоформ)
     all_searchable = set()
     
     for tour in TOURS:
@@ -435,28 +502,34 @@ def search_tours_by_keywords_hybrid(query):
         keywords = str(tour.get('Ключевые слова', '')).lower()
         description = str(tour.get('Описание (Витрина)', '')).lower()
         
-        # Добавляем целые поля
         if name:
             all_searchable.add(name)
         if keywords:
             all_searchable.add(keywords)
         
-        # Добавляем слова из описания
         for word in description.split():
-            if len(word) > 3:  # Только слова больше 3 букв
+            if len(word) > 3:
                 all_searchable.add(word)
     
-    # Ищем похожие слова (80% сходства)
+    # Ищем похожие слова в фразе
     close_matches = get_close_matches(query.lower(), list(all_searchable), n=3, cutoff=0.8)
     
     if close_matches:
-        # Пробуем первый closest match
         for match in close_matches:
             results = search_tours_by_keywords(match)
             if results:
-                return results, match  # Возвращаем с нормализованным запросом
+                return results, match
     
-    # Шаг 3: Если ничего не найдено - пусто
+    # Попробуем difflib на отдельные слова
+    for word in words:
+        if len(word) > 3:
+            close = get_close_matches(word, list(all_searchable), n=1, cutoff=0.8)
+            if close:
+                results = search_tours_by_keywords(close[0])
+                if results:
+                    return results, close[0]
+    
+    # Шаг 4: Если ничего не найдено - пусто
     return [], query
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВИЗУАЛА ===
@@ -666,7 +739,14 @@ async def ask_for_clarification(update: Update, context: ContextTypes.DEFAULT_TY
         understood.append(f"👨‍👩‍👧‍👦 Взрослых: {user_data['adults']}")
     if user_data['children']:
         children_count = len(user_data['children'])
-        understood.append(f"👶 Дети: {children_count} детей")
+        # Правильный падеж для количества детей
+        if children_count == 1:
+            children_word = "ребенок"
+        elif children_count in [2, 3, 4]:
+            children_word = "ребенка"
+        else:
+            children_word = "детей"
+        understood.append(f"👶 Дети: {children_count} {children_word}")
     if user_data['pregnant'] is not None:
         understood.append(f"🤰 Беременность: {'Да' if user_data['pregnant'] else 'Нет'}")
     
@@ -1831,6 +1911,7 @@ async def handle_adults_clarification(update: Update, context: ContextTypes.DEFA
     }
     
     text_lower = user_text.lower()
+    adults = None
     
     # 1. Ищем цифры
     numbers = re.findall(r'\d+', user_text)
@@ -1843,7 +1924,8 @@ async def handle_adults_clarification(update: Update, context: ContextTypes.DEFA
             if word in text_lower:
                 adults = num
                 break
-    else:
+    
+    if adults is None:
         await update.message.reply_text(
             "Пожалуйста, укажите число взрослых (например: '2', 'двое', 'нас трое')",
             reply_markup=ReplyKeyboardRemove()
@@ -1853,6 +1935,9 @@ async def handle_adults_clarification(update: Update, context: ContextTypes.DEFA
     user_data['adults'] = adults
     response = f"✅ Запомнил: {adults} взрослых\n"
     
+    # Сохраняем обновленные данные
+    context.user_data['user_data'] = user_data
+    
     # Убираем вопрос
     if 'next_question' in context.user_data:
         del context.user_data['next_question']
@@ -1861,8 +1946,12 @@ async def handle_adults_clarification(update: Update, context: ContextTypes.DEFA
     current_missing = check_missing_points(user_data)
     
     if not current_missing:
+        # Все данные собраны - показываем подтверждение
+        await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove())
         await show_final_confirmation(update, context, user_data)
     else:
+        # Ещё что-то нужно уточнить
+        await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove())
         await ask_for_clarification(update, context, user_data, current_missing)
     
     return CONFIRMATION
@@ -1875,18 +1964,24 @@ async def handle_children_clarification(update: Update, context: ContextTypes.DE
         # Сохраняем данные о детях
         save_partial_data(context, parsed_data)
         
+        # Обновляем user_data с новыми данными о детях
+        user_data = context.user_data.get('user_data', {})
+        
         # Убираем вопрос
         if 'next_question' in context.user_data:
             del context.user_data['next_question']
         
         # Проверяем, всё ли поняли
-        current_data = context.user_data['user_data']
-        current_missing = check_missing_points(current_data)
+        current_missing = check_missing_points(user_data)
         
         if not current_missing:
-            await show_final_confirmation(update, context, current_data)
+            # Все данные собраны - показываем подтверждение
+            await update.message.reply_text("✅ Информация о детях принята", reply_markup=ReplyKeyboardRemove())
+            await show_final_confirmation(update, context, user_data)
         else:
-            await ask_for_clarification(update, context, current_data, current_missing)
+            # Ещё что-то нужно уточнить
+            await update.message.reply_text("✅ Информация о детях принята", reply_markup=ReplyKeyboardRemove())
+            await ask_for_clarification(update, context, user_data, current_missing)
         
         return CONFIRMATION
     
@@ -1914,6 +2009,9 @@ async def handle_pregnant_clarification(update: Update, context: ContextTypes.DE
         )
         return CONFIRMATION
     
+    # Сохраняем обновленные данные
+    context.user_data['user_data'] = user_data
+    
     # Убираем вопрос
     if 'next_question' in context.user_data:
         del context.user_data['next_question']
@@ -1922,8 +2020,12 @@ async def handle_pregnant_clarification(update: Update, context: ContextTypes.DE
     current_missing = check_missing_points(user_data)
     
     if not current_missing:
+        # Все данные собраны - показываем подтверждение
+        await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove())
         await show_final_confirmation(update, context, user_data)
     else:
+        # Ещё что-то нужно уточнить
+        await update.message.reply_text(response, reply_markup=ReplyKeyboardRemove())
         await ask_for_clarification(update, context, user_data, current_missing)
     
     return CONFIRMATION

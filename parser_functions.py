@@ -51,7 +51,17 @@ def generate_confirmation_summary(data):
         for months in data['children']:
             age_str = format_age_months(months)
             child_ages.append(age_str)
-        children_text = f"Дети: {len(data['children'])} ({'; '.join(child_ages)})"
+        
+        # Правильный падеж для количества детей
+        children_count = len(data['children'])
+        if children_count == 1:
+            children_word = "ребенок"
+        elif children_count in [2, 3, 4]:
+            children_word = "ребенка"
+        else:
+            children_word = "детей"
+        
+        children_text = f"Дети: {children_count} {children_word} ({'; '.join(child_ages)})"
         lines.append(children_text)
     else:
         lines.append("Детей: нет")
