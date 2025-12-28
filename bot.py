@@ -443,12 +443,14 @@ async def send_message_with_effect(update, text, reply_markup=None, parse_mode='
 # Клавиатура с категориями
 def make_category_keyboard():
     categories = get_categories()
-    # Создаем кнопки по 2 в ряд
+    # Создаем кнопки по 3 в ряд для оптимизации места на экране
     keyboard = []
-    for i in range(0, len(categories), 2):
-        row = categories[i:i+2]
+    for i in range(0, len(categories), 3):
+        row = categories[i:i+3]
         keyboard.append(row)
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    # Добавляем кнопку "Новый поиск" в конце
+    keyboard.append(["🔄 Новый поиск"])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ==================== ФУНКЦИЯ ДЛЯ КОНВЕРТАЦИИ ВОЗРАСТА ====================
 def age_to_months(age_str):
@@ -1371,6 +1373,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     user = update.effective_user
 
+    # ОЧИЩАЕМ КОНТЕКСТ - позволяет разным пользователям с одного телефона начать сначала
+    context.user_data.clear()
+    
 # === АНАЛИТИКА: ТРЕКИНГ СЕССИИ ===
     track_user_session(context, BOT_STAGES['start'])
     logger.log_action(user.id, "started_bot", stage=BOT_STAGES['start'])
@@ -1399,6 +1404,20 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь выбрал категорию или задал вопрос"""
     user_choice = update.message.text
     user = update.effective_user
+    
+    # ПРОВЕРЯЕМ КНОПКУ "НОВЫЙ ПОИСК" - сбрасываем контекст и начинаем заново
+    if user_choice == "🔄 Новый поиск":
+        context.user_data.clear()
+        
+        welcome_text = f"""Хорошо, начнём с чистого листа! 📋
+
+Расскажите мне о своей группе - кто едет?"""
+        
+        await update.message.reply_text(
+            welcome_text,
+            reply_markup=make_category_keyboard()
+        )
+        return CATEGORY
     
     # === ВИЗУАЛЬНЫЙ ЭФФЕКТ - TYPING INDICATOR ===
     try:
@@ -2409,6 +2428,47 @@ async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response += f"\n*Сырой текст:* {user_data.get('raw_text', 'N/A')}"
 
     await update.message.reply_text(response, parse_mode='Markdown')
+
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Очистить контекст пользователя - ТОЛЬКО ДЛЯ АДМИНОВ"""
+    user_id = update.effective_user.id
+    
+    # Проверка на администратора
+    ADMINS = [7966971037]  # Ваш Telegram ID
+    
+    if user_id not in ADMINS:
+        await update.message.reply_text("❌ Эта команда только для администраторов")
+        return
+    
+    # Получаем ID пользователя из аргументов команды
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Укажите ID пользователя: /clear <user_id>")
+        return
+    
+    try:
+        target_user_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ ID должен быть числом")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Удаляем все данные пользователя из аналитики
+        cursor.execute("DELETE FROM user_actions WHERE user_id = ?", (target_user_id,))
+        cursor.execute("DELETE FROM drop_off_points WHERE user_id = ?", (target_user_id,))
+        cursor.execute("DELETE FROM analytics WHERE user_id = ?", (target_user_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        await update.message.reply_text(f"✅ Контекст пользователя {target_user_id} очищен")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при очистке: {e}")
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать расширенную статистику бота с аналитикой - ТОЛЬКО ДЛЯ АДМИНОВ"""
     user_id = update.effective_user.id
@@ -3350,6 +3410,7 @@ def main():
     application.add_handler(CommandHandler("tours", show_tours))
     application.add_handler(CommandHandler("debug", debug_info))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("clear", clear_command))
     
     print("✅ Бот запущен! Нажмите Ctrl+C для остановки.")
     
