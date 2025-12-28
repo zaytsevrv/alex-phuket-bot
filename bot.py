@@ -53,7 +53,7 @@ DB_FILE = "bot_statistics.db"
 CSV_FILE = "Price22.12.2025.csv"
 
 # Состояния диалога (шаги)
-CATEGORY, QUALIFICATION, CONFIRMATION, TOUR_DETAILS, QUESTION, BOOKING = range(6)
+CATEGORY, QUALIFICATION, CONFIRMATION, TOUR_DETAILS, QUESTION, BOOKING, BOOKING_HOTEL = range(7)
 
 # Включим логирование для отладки
 logging.basicConfig(
@@ -2399,8 +2399,9 @@ def check_booking_requirements(user_data):
     """Проверяет, есть ли все необходимые данные для бронирования"""
     missing = []
     
-    if not user_data.get('hotel'):
-        missing.append("🏨 *Название отеля* (обязательно для транспорта)")
+    # Отель теперь опционален - будет запрошен отдельно
+    # if not user_data.get('hotel'):
+    #     missing.append("🏨 *Название отеля* (обязательно для транспорта)")
     
     if not user_data.get('phone'):
         missing.append("📱 *Номер телефона*")
@@ -2583,9 +2584,73 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return BOOKING
     else:
-        # Все данные есть - подтверждаем
-        await confirm_booking_via_message(update, context, tour, user_data)
-        return ConversationHandler.END
+        # Все обязательные данные есть - проверяем отель
+        if user_data.get('hotel'):
+            # Отель уже указан - подтверждаем бронирование
+            await confirm_booking_via_message(update, context, tour, user_data)
+            return ConversationHandler.END
+        else:
+            # Отель не указан - спрашиваем опционально
+            await update.message.reply_text(
+                "🏨 *Хотите указать название отеля?*\n\n"
+                "Это поможет менеджеру организовать трансфер.\n\n"
+                "📝 *Варианты ответа:*\n"
+                "• Укажите название отеля\n"
+                "• Напишите 'нет' или 'пропустить'\n"
+                "• Или просто нажмите 'Продолжить без отеля'",
+                parse_mode='Markdown',
+                reply_markup=ReplyKeyboardMarkup([
+                    ["🏨 Указать отель", "➡️ Продолжить без отеля"]
+                ], resize_keyboard=True)
+            )
+            return BOOKING_HOTEL
+
+async def handle_booking_hotel_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает опциональный ввод отеля для бронирования"""
+    user_text = update.message.text.strip()
+    user_data = context.user_data.get('user_data', {})
+    tour = context.user_data.get('booking_tour')
+    
+    # === АНАЛИТИКА ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['booking'])
+    logger.log_action(user.id, "booking_hotel_input", stage=BOT_STAGES['booking'])
+    context.user_data['last_action'] = 'booking_hotel_input'
+    # === КОНЕЦ АНАЛИТИКИ ===
+    
+    # Проверяем ответ пользователя
+    skip_keywords = ['нет', 'пропустить', 'продолжить без отеля', '➡️ продолжить без отеля']
+    
+    if user_text.lower() in skip_keywords or user_text == "➡️ Продолжить без отеля":
+        # Пользователь не хочет указывать отель
+        await update.message.reply_text(
+            "✅ *Понятно, продолжаем без указания отеля.*\n\n"
+            "Менеджер свяжется для уточнения деталей трансфера.",
+            parse_mode='Markdown'
+        )
+    elif user_text == "🏨 Указать отель":
+        # Просим ввести отель
+        await update.message.reply_text(
+            "🏨 *Укажите название вашего отеля:*\n\n"
+            "Например: Patong Beach Hotel или просто 'Patong Beach'",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return BOOKING_HOTEL
+    else:
+        # Пользователь ввел название отеля
+        user_data['hotel'] = user_text.title()
+        context.user_data['user_data'] = user_data
+        
+        await update.message.reply_text(
+            f"✅ *Отель сохранен:* {user_data['hotel']}\n\n"
+            "Теперь все данные готовы для бронирования.",
+            parse_mode='Markdown'
+        )
+    
+    # Подтверждаем бронирование
+    await confirm_booking_via_message(update, context, tour, user_data)
+    return ConversationHandler.END
 
 def parse_booking_info(text):
     """Парсит информацию для бронирования из текста"""
@@ -2709,6 +2774,9 @@ def main():
             ],
             BOOKING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_booking_input)
+            ],
+            BOOKING_HOTEL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_booking_hotel_input)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
