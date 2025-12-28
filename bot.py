@@ -355,6 +355,62 @@ def format_deepseek_answer(text):
     
     return text
 
+def search_tours_by_keywords(query):
+    """
+    Ищет туры по ключевому слову/фразе во всех полях прайса.
+    Проверяет: название, ключевые слова, описание, теги.
+    Возвращает список кортежей (тур, категория, релевантность)
+    """
+    query_lower = query.lower().strip()
+    if not query_lower:
+        return []
+    
+    results = []
+    
+    for tour in TOURS:
+        relevance = 0
+        
+        # 1. Проверяем название (самый высокий приоритет)
+        tour_name = tour.get('Название', '').lower()
+        if query_lower in tour_name:
+            relevance += 100
+        
+        # 2. Проверяем ключевые слова
+        keywords = tour.get('Ключевые слова', '')
+        if keywords:
+            keywords_lower = str(keywords).lower()
+            if query_lower in keywords_lower:
+                relevance += 50
+            # Ищем по отдельным словам
+            query_words = query_lower.split()
+            for word in query_words:
+                if word in keywords_lower:
+                    relevance += 10
+        
+        # 3. Проверяем описание витрины
+        description = tour.get('Описание (Витрина)', '')
+        if description:
+            description_lower = str(description).lower()
+            if query_lower in description_lower:
+                relevance += 30
+        
+        # 4. Проверяем честный обзор
+        review = tour.get('Честный обзор', '')
+        if review:
+            review_lower = str(review).lower()
+            if query_lower in review_lower:
+                relevance += 20
+        
+        # Если нашли совпадение - добавляем в результаты
+        if relevance > 0:
+            category = tour.get('Для информации', 'Неизвестная категория')
+            results.append((tour, category, relevance))
+    
+    # Сортируем по релевантности (выше релевантность = выше в списке)
+    results.sort(key=lambda x: x[2], reverse=True)
+    
+    return results
+
 def detect_location_category(text):
     """
     Определяет, спрашивает ли пользователь о конкретном месте.
@@ -1466,47 +1522,100 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_choice not in valid_categories:
         # Может быть это вопрос?
         if is_likely_question(user_choice):
-            # ✅ ЭТО ВОПРОС - отвечаем DeepSeek!
+            # ✅ ЭТО ВОПРОС - сначала пытаемся найти туры по ключевым словам!
             
-            # Показываем typing indicator - бот "думает"
-            await update.effective_chat.send_chat_action(ChatAction.TYPING)
-            await asyncio.sleep(1)
+            # Ищем туры которые соответствуют запросу
+            matching_tours = search_tours_by_keywords(user_choice)
             
-            # Подготавливаем контекст для DeepSeek
-            context_info = "Пользователь еще не выбрал категорию, задает вопрос о Пхукете"
-            
-            # Генерируем ответ с DeepSeek
-            deepseek_answer = generate_deepseek_response(
-                user_query=user_choice,
-                tour_data=None,
-                context_info=context_info,
-                user_name=user.first_name
-            )
-            
-            # Красиво форматируем ответ
-            deepseek_answer = format_deepseek_answer(deepseek_answer)
-            
-            # Отправляем ответ
-            await update.message.reply_text(
-                deepseek_answer,
-                parse_mode='Markdown',
-                reply_markup=ReplyKeyboardRemove()
-            )
-            
-            # После ответа показываем категории
-            await update.message.reply_text(
-                "📋 *Теперь выбирайте категорию экскурсий:*",
-                parse_mode='Markdown',
-                reply_markup=make_category_keyboard()
-            )
-            
-            # === АНАЛИТИКА ===
-            track_user_session(context, BOT_STAGES['category_selection'])
-            logger.log_action(user.id, "asked_question_at_category", stage=BOT_STAGES['category_selection'], query=user_choice)
-            context.user_data['last_action'] = 'category_question'
-            # === КОНЕЦ АНАЛИТИКИ ===
-            
-            return CATEGORY
+            if matching_tours:
+                # Нашли туры! Покажем их вместо DeepSeek
+                # Берем первые 5 уникальных категорий
+                categories_with_tours = {}
+                for tour, category, relevance in matching_tours[:15]:
+                    if category not in categories_with_tours:
+                        categories_with_tours[category] = []
+                    categories_with_tours[category].append(tour)
+                
+                # Отправляем умный ответ
+                answer = f"🎯 *Я нашел {len(matching_tours)} туров по вашему запросу '*{user_choice}*'!*\n\n"
+                
+                # Показываем туры по категориям
+                for category, tours in list(categories_with_tours.items())[:3]:
+                    answer += f"📌 *{category}:*\n"
+                    for tour in tours[:2]:  # По 2 тура на категорию
+                        name = tour.get('Название', 'Без названия')
+                        price = tour.get('Цена Взр', 'N/A')
+                        answer += f"  • {name} ({price} THB)\n"
+                    answer += "\n"
+                
+                await update.message.reply_text(
+                    answer,
+                    parse_mode='Markdown'
+                )
+                
+                # Показываем полный список туров первой категории
+                first_category = list(categories_with_tours.keys())[0]
+                tours_to_show = categories_with_tours[first_category]
+                
+                context.user_data['selected_category'] = first_category
+                context.user_data['ranked_tours'] = tours_to_show
+                context.user_data['tour_offset'] = 0
+                
+                await update.message.reply_text(
+                    format_tours_group(tours_to_show[:5]),
+                    parse_mode='Markdown',
+                    reply_markup=make_tours_keyboard(tours_to_show, 0, 5)
+                )
+                
+                # === АНАЛИТИКА ===
+                track_user_session(context, BOT_STAGES['category_selection'], {'search_query': user_choice})
+                logger.log_action(user.id, "searched_tours", stage=BOT_STAGES['category_selection'], query=user_choice, found=len(matching_tours))
+                context.user_data['last_action'] = 'search_query'
+                # === КОНЕЦ АНАЛИТИКИ ===
+                
+                return TOUR_DETAILS
+            else:
+                # Туры не найдены - используем DeepSeek для ответа
+                # Показываем typing indicator - бот "думает"
+                await update.effective_chat.send_chat_action(ChatAction.TYPING)
+                await asyncio.sleep(1)
+                
+                # Подготавливаем контекст для DeepSeek
+                context_info = "Пользователь еще не выбрал категорию, задает вопрос о Пхукете"
+                
+                # Генерируем ответ с DeepSeek
+                deepseek_answer = generate_deepseek_response(
+                    user_query=user_choice,
+                    tour_data=None,
+                    context_info=context_info,
+                    user_name=user.first_name
+                )
+                
+                # Красиво форматируем ответ
+                deepseek_answer = format_deepseek_answer(deepseek_answer)
+                
+                # Отправляем ответ
+                await update.message.reply_text(
+                    deepseek_answer,
+                    parse_mode='Markdown',
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                
+                # После ответа показываем категории
+                await update.message.reply_text(
+                    "📋 *Теперь выбирайте категорию экскурсий:*",
+                    parse_mode='Markdown',
+                    reply_markup=make_category_keyboard()
+                )
+                
+                # === АНАЛИТИКА ===
+                track_user_session(context, BOT_STAGES['category_selection'])
+                logger.log_action(user.id, "asked_question_at_category", stage=BOT_STAGES['category_selection'], query=user_choice)
+                context.user_data['last_action'] = 'category_question'
+                # === КОНЕЦ АНАЛИТИКИ ===
+                
+                return CATEGORY
+
         else:
             # Это не вопрос и не категория - ошибка ввода
             await update.message.reply_text(
