@@ -484,6 +484,10 @@ def search_tours_by_keywords_hybrid(query):
     content_words.sort(key=len, reverse=True)  # Сначала длинные слова
     
     # Пытаемся искать каждое слово и его варианты
+    # Собираем ВСЕ результаты по всем вариантам лемм для максимального покрытия
+    all_lemma_results = {}  # tour_id -> (tour, category, relevance)
+    found_word = None
+    
     for word in content_words:
         # Получаем варианты слова (лемматизация)
         lemma_variants = get_lemma_variants(word)
@@ -492,7 +496,16 @@ def search_tours_by_keywords_hybrid(query):
         for variant in lemma_variants:
             results = search_tours_by_keywords(variant)
             if results:
-                return results, word  # Возвращаем с исходным словом
+                found_word = word  # Запоминаем первое слово которое дало результаты
+                for tour, category, relevance in results:
+                    tour_id = tour.get('ID')
+                    if tour_id not in all_lemma_results:
+                        all_lemma_results[tour_id] = (tour, category, relevance)
+    
+    # Если нашли результаты - возвращаем все уникальные
+    if all_lemma_results:
+        results = list(all_lemma_results.values())
+        return results, found_word
     
     # Шаг 3: Размытый поиск (для опечаток и словоформ)
     all_searchable = set()
@@ -562,7 +575,11 @@ async def send_message_with_effect(update, text, reply_markup=None, parse_mode='
         )
 
 # Клавиатура с категориями (гибридная: ХИТ + меню)
-def make_category_keyboard():
+def make_category_keyboard(show_all=False):
+    """
+    show_all=False: показываем только ХИТ категории + кнопка "Показать ещё"
+    show_all=True: показываем все категории + кнопка "Скрыть"
+    """
     categories = get_categories()
     
     # Определяем ХИТ категории (самые популярные)
@@ -574,23 +591,36 @@ def make_category_keyboard():
     
     keyboard = []
     
-    # Добавляем ХИТ категории отдельными кнопками (большие)
-    for cat in categories:
-        if cat in hit_categories:
-            keyboard.append([cat])
+    # 1. ХИТ категории в 2 ряда:
+    #    Первый ряд: "Море (Острова)"
+    #    Второй ряд: "Суша (обзорные)" + "Суша (семейные)"
+    keyboard.append(["Море (Острова)"])
+    keyboard.append(["Суша (обзорные)", "Суша (семейные)"])
     
-    # Добавляем остальные категории по 2 в ряд
+    # 2. Остальные категории (non-HIT)
     remaining_cats = [c for c in categories if c not in hit_categories]
     
-    # Вставляем остальные категории по 2 в ряд
-    for i in range(0, len(remaining_cats), 2):
-        row = remaining_cats[i:i+2]
-        keyboard.append(row)
+    if show_all and remaining_cats:
+        # Показываем все остальные категории по 2 в ряд
+        for i in range(0, len(remaining_cats), 2):
+            row = remaining_cats[i:i+2]
+            keyboard.append(row)
+        
+        # Кнопка для сворачивания
+        keyboard.append(["🔽 Скрыть категории"])
+    elif remaining_cats:
+        # Показываем только кнопку "Показать ещё"
+        keyboard.append(["📂 Показать ещё категории"])
     
     # Добавляем кнопку "Новый поиск"
     keyboard.append(["🔄 Новый поиск"])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+def make_confirmation_keyboard():
+    """Создаёт клавиатуру для подтверждения данных"""
+    keyboard = [["✅ Да, всё верно", "✏️ Нет, исправить"]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # ==================== ФУНКЦИЯ ДЛЯ КОНВЕРТАЦИИ ВОЗРАСТА ====================
 def age_to_months(age_str):
@@ -1090,7 +1120,8 @@ def rank_tours_by_hits_and_priorities(tours, user_data):
     regular_tours = []
     
     for tour in tours:
-        if tour.get("ХИТ", "").strip():
+        # ИСПРАВЛЕНО: проверяем ХИТ в столбце 4 (пустой ключ ''), не в названии
+        if tour.get('', '').strip() == 'ХИТ':
             hit_tours.append(tour)
         else:
             regular_tours.append(tour)
@@ -1181,12 +1212,26 @@ def format_tour_card_compact(tour, index=None):
     """
     Форматирует тур в компактную КАРТОЧКУ без излишеств.
     Подходит для списков и группировки.
+    ИСПРАВЛЕНО: убирает "(ХИТ)" и пустые скобки, но оставляет (Комфорт+, Стандарт)
     """
-    name = tour.get("Название", "Без названия").replace("ХИТ", "").strip()
+    import re
+    
+    name = tour.get("Название", "Без названия")
+    
+    # ОЧИСТКА: убираем только "(ХИТ)" из названия
+    name = name.replace("(ХИТ)", "").replace("ХИТ", "").strip()
+    
+    # ОЧИСТКА: убираем пустые скобки "()" которые могут остаться
+    name = re.sub(r'\s*\(\s*\)\s*', ' ', name)
+    
+    # Убираем лишние пробелы
+    name = re.sub(r'\s+', ' ', name).strip()
+    
     price_adult = tour.get("Цена Взр", "?")
     price_child = tour.get("Цена Дет", "")
     vitrina = tour.get("Описание (Витрина)", "")
-    is_hit = "ХИТ" in tour.get("Название", "")
+    # ИСПРАВЛЕНО: проверяем ХИТ в столбце 4, а не в названии
+    is_hit = tour.get('', '').strip() == 'ХИТ'
     
     # Первое предложение описания (макс 80 символов)
     desc_short = vitrina.split('.')[0][:80].strip() if vitrina else ""
@@ -1252,14 +1297,18 @@ def format_tour_description_alex_style(tour):
     category = tour.get("Для информации", "")
     
     # Убираем слово ХИТ из названия для чистоты, но запоминаем
-    display_name = name
-    is_hit = False
-    if "ХИТ" in name:
-        is_hit = True
-        # Аккуратно убираем ХИТ из отображаемого имени
-        display_name = display_name.replace("ХИТ", "").strip()
-        if display_name.startswith(",") or display_name.startswith(";"):
-            display_name = display_name[1:].strip()
+    display_name = name.replace("(ХИТ)", "").replace("ХИТ", "").strip()
+    
+    # ИСПРАВЛЕНО: проверяем ХИТ по столбцу 4, а не в названии
+    is_hit = tour.get('', '').strip() == 'ХИТ'
+    
+    # Удаляем пустые скобки которые могут остаться
+    import re
+    display_name = re.sub(r'\s*\(\s*\)\s*', ' ', display_name)
+    display_name = re.sub(r'\s+', ' ', display_name).strip()
+    
+    if display_name.startswith(",") or display_name.startswith(";"):
+        display_name = display_name[1:].strip()
     
     # Определяем эмодзи по категории
     if "Море" in category:
@@ -1313,10 +1362,13 @@ def format_tour_description_alex_style(tour):
         tag_descriptions = []
         tag_text = tags.lower()
         
-        # Маппинг тегов (сначала проверяем самые важные)
+        # Маппинг тегов (ИСПРАВЛЕНО: убираем отрицательные теги вроде "нельзя")
+        # Показываем ТОЛЬКО позитивные качества
         tag_mappings = [
-            ("#нельзя_беременным", "• *Не подходит беременным*"),
-            ("#дети_от_1_года", "• *Детям от 1 года*"),
+            # УДАЛЕНО: ("#нельзя_беременным", "• *Не подходит беременным*"),  ← Убираем отрицательное
+            ("#дети_от_1_года", "• *Безопасно для детей от 1 года*"),
+            ("#дети_от_2_лет", "• *Идеально для детей от 2 лет*"),
+            ("#дети_от_3_лет", "• *Отлично подходит для детей от 3 лет*"),
             ("#комфорт", "• *Максимальный комфорт*"),
             ("#релакс", "• *Идеально для релакса*"),
             ("#бюджетно", "• *Отличное соотношение цены и качества*"),
@@ -1452,44 +1504,102 @@ def get_tour_additional_info(tour):
     return info_text
 
 # ==================== СОЗДАНИЕ ИНЛАЙН-КНОПОК ДЛЯ ЭКСКУРСИЙ ====================
-def make_tours_keyboard(tours, offset=0, limit=5, show_question_button=True):
+def make_tours_keyboard(tours, show_question_button=True, page=0, context=None):
     """
-    Создает инлайн-клавиатуру для выбора экскурсий
+    Создает инлайн-клавиатуру для выбора экскурсий с ПАГИНАЦИЕЙ
+    - page=0: показываем ХИТы (максимум 3)
+    - page>0: показываем следующие 3 обычные экскурсии
     """
+    import re
+    
+    # ИСПРАВЛЕНО: фильтруем только ХИТы по столбцу 4, а не по названию
+    hit_tours = [t for t in tours if t.get('', '').strip() == 'ХИТ']
+    regular_tours = [t for t in tours if t.get('', '').strip() != 'ХИТ']
+    
     keyboard = []
     
-    for i in range(offset, min(offset + limit, len(tours))):
-        tour = tours[i]
-        name = tour.get("Название", f"Экскурсия {i+1}")
+    # На первой странице (page=0) показываем ХИТы
+    if page == 0:
+        items_to_show = hit_tours[:3]
+        start_index = 0
+        total_hits = len(hit_tours)
         
-        # Очищаем название от ХИТ для отображения
-        display_name = name.replace("ХИТ", "").strip()
-        if display_name.startswith(",") or display_name.startswith(";"):
-            display_name = display_name[1:].strip()
-        
-        # Удаляем пустые скобки вроде ()
-        display_name = display_name.replace("()", "").strip()
-        
-        # Обрезаем слишком длинные названия
-        if len(display_name) > 30:
-            display_name = display_name[:27] + "..."
-        
-        # Добавляем эмодзи хитов и нумерацию
-        if "ХИТ" in name:
+        for i, tour in enumerate(items_to_show):
+            name = tour.get("Название", f"Экскурсия {i+1}")
+            
+            # Очищаем название: убираем только "(ХИТ)", оставляем (Комфорт+) и (Стандарт)
+            display_name = name.replace("(ХИТ)", "").replace("ХИТ", "").strip()
+            if display_name.startswith(",") or display_name.startswith(";"):
+                display_name = display_name[1:].strip()
+            
+            # Удаляем пустые скобки которые могут остаться
+            display_name = re.sub(r'\s*\(\s*\)\s*', ' ', display_name)
+            display_name = re.sub(r'\s+', ' ', display_name).strip()
+            
+            # Обрезаем слишком длинные названия
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
+            
+            # Добавляем эмодзи для ХИТов
             display_name = f"🏆 {display_name}"
+            
+            # Сохраняем исходный индекс для callback
+            tour_original_index = tours.index(tour)
+            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_{tour_original_index}")])
         
-        keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_{i}")])
+        # Если есть ещё ХИТы - показываем кнопку следующих ХИТов
+        if total_hits > 3:
+            remaining = total_hits - 3
+            keyboard.append([InlineKeyboardButton(f"📋 Показать ещё ({remaining} ХИТов)", callback_data=f"show_more_tours_1")])
     
-    # Кнопки навигации
-    nav_buttons = []
-    if offset > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️ Предыдущие", callback_data=f"prev_{offset-limit}"))
-    
-    if offset + limit < len(tours):
-        nav_buttons.append(InlineKeyboardButton("Показать ещё ▶️", callback_data=f"next_{offset+limit}"))
-    
-    if nav_buttons:
-        keyboard.append(nav_buttons)
+    else:
+        # На страницах > 0 показываем остальные ХИТы или обычные туры
+        if page <= len(hit_tours) // 3:  # Ещё есть ХИТы
+            start_idx = page * 3
+            items_to_show = hit_tours[start_idx:start_idx + 3]
+            is_hits = True
+        else:
+            # Переходим на обычные туры
+            hits_pages = (len(hit_tours) + 2) // 3  # Округляем вверх
+            regular_page = page - hits_pages
+            start_idx = regular_page * 3
+            items_to_show = regular_tours[start_idx:start_idx + 3]
+            is_hits = False
+        
+        # Кнопка "Назад"
+        back_page = page - 1
+        if back_page == 0:
+            back_label = "← Назад к ХИТам"
+        else:
+            back_label = "← Предыдущие"
+        keyboard.append([InlineKeyboardButton(back_label, callback_data=f"show_more_tours_{back_page}")])
+        
+        # Показываем туры на текущей странице
+        for i, tour in enumerate(items_to_show):
+            name = tour.get("Название", f"Экскурсия {i+1}")
+            
+            display_name = name.replace("(ХИТ)", "").replace("ХИТ", "").strip()
+            if display_name.startswith(",") or display_name.startswith(";"):
+                display_name = display_name[1:].strip()
+            
+            display_name = re.sub(r'\s*\(\s*\)\s*', ' ', display_name)
+            display_name = re.sub(r'\s+', ' ', display_name).strip()
+            
+            if len(display_name) > 30:
+                display_name = display_name[:27] + "..."
+            
+            if tour.get('', '').strip() == 'ХИТ':
+                display_name = f"🏆 {display_name}"
+            
+            tour_original_index = tours.index(tour)
+            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_{tour_original_index}")])
+        
+        # Кнопка "Вперед" если есть ещё туры
+        hits_pages = (len(hit_tours) + 2) // 3
+        total_pages = hits_pages + (len(regular_tours) + 2) // 3
+        
+        if page + 1 < total_pages:
+            keyboard.append([InlineKeyboardButton("Следующие →", callback_data=f"show_more_tours_{page + 1}")])
     
     # ⭐ ДОБАВИЛИ КНОПКУ "ЗАДАТЬ ВОПРОС"
     if show_question_button:
@@ -1591,6 +1701,23 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             welcome_text,
             reply_markup=make_category_keyboard()
+        )
+        return CATEGORY
+    
+    # ПРОВЕРЯЕМ КНОПКИ РАЗВЁРТЫВАНИЯ КАТЕГОРИЙ
+    if user_choice == "📂 Показать ещё категории":
+        # Показываем развёрнутый список
+        await update.message.reply_text(
+            "Вот остальные категории:",
+            reply_markup=make_category_keyboard(show_all=True)
+        )
+        return CATEGORY
+    
+    if user_choice == "🔽 Скрыть категории":
+        # Скрываем обратно
+        await update.message.reply_text(
+            "Выбираем из основных категорий?",
+            reply_markup=make_category_keyboard(show_all=False)
         )
         return CATEGORY
     
@@ -1729,7 +1856,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             format_tours_group(tours_to_show[:5]),
             parse_mode='Markdown',
-            reply_markup=make_tours_keyboard(tours_to_show, 0, 5)
+            reply_markup=make_tours_keyboard(tours_to_show)
         )
         
         # === АНАЛИТИКА ===
@@ -1826,7 +1953,7 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
             
             await update.message.reply_text(
                 "Выберите экскурсию для подробностей:",
-                reply_markup=make_tours_keyboard(sea_tours, 0, 5, show_question_button=True)
+                reply_markup=make_tours_keyboard(sea_tours, show_question_button=True)
             )
             
             # Убираем pending_category
@@ -2118,7 +2245,7 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
         
         await update.message.reply_text(
             "Выберите экскурсию для подробностей:",
-            reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
+            reply_markup=make_tours_keyboard(category_tours, show_question_button=True)
         )
         
         return TOUR_DETAILS
@@ -2152,7 +2279,7 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
         
         await update.message.reply_text(
             "Выберите экскурсию для подробностей:",
-            reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
+            reply_markup=make_tours_keyboard(category_tours, show_question_button=True)
         )
         
         return TOUR_DETAILS
@@ -2295,27 +2422,23 @@ async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, u
         
         return CONFIRMATION  # Остаемся в состоянии подтверждения для обработки кнопок
     
-    # Если экскурсии найдены - показываем их с ЖЕСТКОЙ приоритизацией ХИТов
-    hits = [t for t in ranked_tours if "ХИТ" in t.get("Название", "")]
-    regular = [t for t in ranked_tours if "ХИТ" not in t.get("Название", "")]
+    # ИСПРАВЛЕНО: показываем ТОЛЬКО ХИТы (максимум 3) для первого показа
+    # Это избавляет от "стены текста" и показывает лучшие варианты
+    # Проверяем ХИТ по столбцу 4, а не в названии
+    hits = [t for t in ranked_tours if t.get('', '').strip() == 'ХИТ']
     
-    response = f"🎉 Отлично! Подобрал для вас лучшие варианты в категории *{category}*\n"
+    response = f"🎉 Отлично! Подобрал для вас ЛУЧШИЕ экскурсии в категории *{category}*\n"
     
     if hits:
-        response += f"\n🏆 *ХИТы* ({len(hits)})\n"
+        response += f"\n🏆 *Наши ХИТы* ({len(hits)} всего)\n"
         response += "─" * 40 + "\n"
+        # Показываем максимум 3 ХИТа
         for i, tour in enumerate(hits[:3], 1):
             response += format_tour_card_compact(tour, i)
             response += "\n"
+        
         if len(hits) > 3:
-            response += f"\n_... и ещё {len(hits) - 3} вариантов_\n"
-    
-    if regular:
-        response += f"\n📋 *Также есть* ({len(regular)})\n"
-        response += "─" * 40 + "\n"
-        for i, tour in enumerate(regular[:3], 1):
-            response += format_tour_card_compact(tour, i)
-            response += "\n"
+            response += f"\n💡 Всего ХИТов: {len(hits)}. Остальные можно посмотреть ниже!\n"
     
     response += "\n💡 Нажимайте на любой тур для полного описания!"
     
@@ -2328,7 +2451,7 @@ async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, u
     # Показываем клавиатуру с экскурсиями
     await update.message.reply_text(
         "Выберите экскурсию:",
-        reply_markup=make_tours_keyboard(ranked_tours, 0, 5)
+        reply_markup=make_tours_keyboard(ranked_tours)
     )
     
     return TOUR_DETAILS
@@ -2407,8 +2530,23 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
+    elif callback_data.startswith("show_more_tours_"):
+        # Пагинация списка экскурсий
+        try:
+            page = int(callback_data.split("_")[3])
+        except (IndexError, ValueError):
+            page = 1
+        
+        ranked_tours = context.user_data.get('ranked_tours', [])
+        context.user_data['current_tour_page'] = page
+        
+        # Обновляем список с новой страницей
+        await query.edit_message_reply_markup(
+            reply_markup=make_tours_keyboard(ranked_tours, page=page)
+        )
+    
     elif callback_data.startswith("prev_") or callback_data.startswith("next_"):
-        # Навигация по списку экскурсий
+        # Навигация по списку экскурсий (для старых версий, если есть)
         offset = int(callback_data.split("_")[1])
         ranked_tours = context.user_data.get('ranked_tours', [])
         
@@ -2416,7 +2554,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Обновляем список
         await query.edit_message_reply_markup(
-            reply_markup=make_tours_keyboard(ranked_tours, offset, 3)
+            reply_markup=make_tours_keyboard(ranked_tours)
         )
     
     elif callback_data == "back_to_list_0":
@@ -2427,7 +2565,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             text=f"📋 *Доступные экскурсии ({len(ranked_tours)} вариантов):*",
             parse_mode='Markdown',
-            reply_markup=make_tours_keyboard(ranked_tours, offset, 3)
+            reply_markup=make_tours_keyboard(ranked_tours)
         )
     
     elif callback_data == "change_category":
@@ -2943,7 +3081,7 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"📋 *Доступные экскурсии ({len(ranked_tours)} вариантов):*",
             parse_mode='Markdown',
-            reply_markup=make_tours_keyboard(ranked_tours, offset, 5)
+            reply_markup=make_tours_keyboard(ranked_tours)
         )
         return TOUR_DETAILS
     
@@ -3021,13 +3159,24 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_chat.send_chat_action(ChatAction.TYPING)
         await asyncio.sleep(1.5)  # Даем время на "размышление"
 
-        # Генерируем ответ с DeepSeek
-        deepseek_answer = generate_deepseek_response(
-            user_query=update.message.text,
-            tour_data=tour_data,
-            context_info=context_info,
-            user_name=update.effective_user.first_name
-        )
+        # ИСПРАВЛЕНО: добавляем таймаут для DeepSeek, чтобы не зависнуть
+        try:
+            # Создаем таску с таймаутом (максимум 10 секунд на ответ)
+            deepseek_answer = await asyncio.wait_for(
+                asyncio.to_thread(
+                    generate_deepseek_response,
+                    update.message.text,
+                    tour_data,
+                    context_info,
+                    update.effective_user.first_name
+                ),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            deepseek_answer = "⏳ *Не успел обработать вопрос в срок.*\n\nОтправьте свой вопрос напрямую менеджеру — ответим в течение дня!"
+        except Exception as e:
+            print(f"❌ Ошибка при обработке вопроса: {e}")
+            deepseek_answer = "😟 *Что-то пошло не так.*\n\nОтправьте вопрос напрямую менеджеру — помогу с удовольствием!"
 
         # Красиво форматируем ответ
         deepseek_answer = format_deepseek_answer(deepseek_answer)
