@@ -49,7 +49,7 @@ DB_FILE = "bot_statistics.db"
 CSV_FILE = "Price22.12.2025.csv"
 
 # Состояния диалога (шаги)
-CATEGORY, QUALIFICATION, TOUR_DETAILS, QUESTION = range(4)
+CATEGORY, QUALIFICATION, CONFIRMATION, TOUR_DETAILS, QUESTION = range(5)
 
 # Включим логирование для отладки
 logging.basicConfig(
@@ -260,11 +260,6 @@ def make_category_keyboard():
 def age_to_months(age_str):
     """
     Конвертирует текст возраста в месяцы для точной проверки ограничений.
-    Примеры:
-    - "5 лет" → 60 месяцев
-    - "1 год 3 месяца" → 15 месяцев
-    - "10 месяцев" → 10 месяцев
-    - "2 года" → 24 месяца
     """
     if not age_str:
         return 0
@@ -272,6 +267,18 @@ def age_to_months(age_str):
     age_str = str(age_str).lower().strip()
     total_months = 0
     
+    # === НОВЫЙ КОД: Обработка комбинированных возрастов ===
+    # Паттерн для "2 года и 7 месяцев", "1 год 3 месяца"
+    combined_pattern = r'(\d+)\s*(?:лет|год[а]?|г\.?|л\.?)\s*(?:и\s*)?(\d+)?\s*(?:месяц[а-я]*|мес\.?|м\.?)?'
+    match = re.search(combined_pattern, age_str)
+    
+    if match:
+        years = int(match.group(1)) if match.group(1) else 0
+        months = int(match.group(2)) if match.group(2) else 0
+        total_months = years * 12 + months
+        return total_months
+    
+    # Старая логика для простых форматов
     # Ищем годы
     year_match = re.search(r'(\d+)\s*(?:лет|год[а]?|г\.?|л\.?)', age_str)
     if year_match:
@@ -284,7 +291,7 @@ def age_to_months(age_str):
         months = int(month_match.group(1))
         total_months += months
     
-    # Если просто число без указания единиц (например "5"), считаем что это годы
+    # Если просто число без указания единиц
     if total_months == 0 and age_str.isdigit():
         total_months = int(age_str) * 12
     
@@ -292,43 +299,338 @@ def age_to_months(age_str):
 
 def format_age_months(months):
     """
-    Форматирует возраст в месяцах в читаемый вид.
-    Примеры:
-    - 10 → "10 мес."
-    - 15 → "1 год 3 мес." (15 месяцев = 1 год 3 месяца)
-    - 24 → "2 года" (24 месяца = 2 года)
-    - 37 → "3 года 1 мес." (37 месяцев = 3 года 1 месяц)
+    Форматирует возраст в месяцах в читаемый вид с округлением ВНИЗ.
+    
+    Правила:
+    - До 12 месяцев: показываем месяцы (9 мес.)
+    - От 12 месяцев: округляем ВНИЗ до целых лет
+    - 1 год и 11 месяцев → 1 год
+    - 2 года и 7 месяцев → 2 года
     """
     if months < 12:
+        # Меньше года - показываем месяцы
         return f"{months} мес."
-    elif months == 12:
+    
+    # Больше или равно году - округляем ВНИЗ до целых лет
+    years = months // 12  # Целочисленное деление - округление вниз
+    
+    if years == 1:
         return "1 год"
-    elif months < 24:
-        remaining = months - 12
-        return f"1 год {remaining} мес."
+    elif 2 <= years <= 4:
+        return f"{years} года"
     else:
-        years = months // 12  # Целочисленное деление - округление в меньшую сторону
-        remaining_months = months % 12
+        return f"{years} лет"
+
+# ==================== ФУНКЦИИ ДЛЯ ПОШАГОВОГО УТОЧНЕНИЯ ====================
+
+def save_partial_data(context, new_data):
+    """Сохраняет частичные данные пользователя"""
+    if 'user_data' not in context.user_data:
+        context.user_data['user_data'] = {
+            'adults': 0,
+            'children': [],        # возрасты в месяцах
+            'children_original': [], # оригинальный текст возраста
+            'pregnant': None,      # None = не указано
+            'priorities': [],
+            'health_issues': [],
+            'raw_text': ''
+        }
+    
+    user_data = context.user_data['user_data']
+    
+    # Объединяем raw_text
+    if 'raw_text' in new_data and new_data['raw_text']:
+        user_data['raw_text'] += " " + new_data['raw_text']
+    
+    # Обновляем взрослых (только если указано явно)
+    if 'adults' in new_data and new_data['adults'] > 0:
+        user_data['adults'] = new_data['adults']
+    
+    # Обновляем детей
+    if 'children' in new_data and new_data['children']:
+        for age, original in zip(new_data['children'], new_data['children_original']):
+            if age not in user_data['children']:
+                user_data['children'].append(age)
+                user_data['children_original'].append(original)
+    
+    # Обновляем беременность (только если явно указано)
+    if 'pregnant' in new_data and new_data['pregnant'] is not None:
+        user_data['pregnant'] = new_data['pregnant']
+    
+    # Обновляем приоритеты
+    if 'priorities' in new_data:
+        for priority in new_data['priorities']:
+            if priority not in user_data['priorities']:
+                user_data['priorities'].append(priority)
+    
+    # Обновляем проблемы со здоровьем
+    if 'health_issues' in new_data:
+        for issue in new_data['health_issues']:
+            if issue not in user_data['health_issues']:
+                user_data['health_issues'].append(issue)
+
+def check_missing_points(user_data):
+    """Проверяет, какие данные отсутствуют"""
+    missing_points = []
+    
+    # Проверяем взрослых
+    if user_data['adults'] == 0:
+        missing_points.append("количество взрослых")
+    
+    # Проверяем беременность
+    if user_data['pregnant'] is None:
+        missing_points.append("беременность (да/нет)")
+    
+    # Проверяем информацию о детях
+    raw_text_lower = user_data['raw_text'].lower() if user_data['raw_text'] else ""
+    child_keywords = ['ребен', 'дет', 'малыш', 'младш', 'сын', 'доч']
+    
+    if any(keyword in raw_text_lower for keyword in child_keywords):
+        if not user_data['children']:
+            # Если упомянули детей, но возрастов нет
+            missing_points.append("информация о детях")
+    
+    return missing_points
+
+async def ask_for_clarification(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data, missing_points):
+    """Спрашивает уточнение для непонятых данных"""
+    
+    response = "✅ *Часть информации я понял:*\n\n"
+    
+    # Что понял
+    understood = []
+    if user_data['adults'] > 0:
+        understood.append(f"👨‍👩‍👧‍👦 Взрослых: {user_data['adults']}")
+    if user_data['children']:
+        children_count = len(user_data['children'])
+        understood.append(f"👶 Дети: {children_count} детей")
+    if user_data['pregnant'] is not None:
+        understood.append(f"🤰 Беременность: {'Да' if user_data['pregnant'] else 'Нет'}")
+    
+    if understood:
+        response += "\n".join(understood) + "\n\n"
+    else:
+        response += "Пока ничего не понял 😅\n\n"
+    
+    # Что нужно уточнить (спрашиваем по одному)
+    if "количество взрослых" in missing_points:
+        response += "❓ *Сколько взрослых в группе?*\n"
+        context.user_data['next_question'] = 'adults'
+    
+    elif "беременность (да/нет)" in missing_points:
+        response += "❓ *Есть ли беременные в группе? (Да/Нет)*\n"
+        context.user_data['next_question'] = 'pregnant'
+    
+    elif "информация о детях" in missing_points:
+        response += "❓ *Есть ли дети? Если да, укажите возраст каждого.*\n"
+        context.user_data['next_question'] = 'children'
+    
+    response += "\n*Пожалуйста, ответьте на вопрос выше.*"
+    
+    await update.message.reply_text(
+        response,
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+async def show_final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data):
+    """Показывает финальное подтверждение когда все данные собраны"""
+    response = "✅ *Отлично! Теперь у меня вся информация!*\n\n"
+    
+    response += f"👨‍👩‍👧‍👦 *Взрослых:* {user_data['adults']}\n"
+    
+    if user_data['children']:
+        children_count = len(user_data['children'])
+        age_texts = []
         
-        if years == 1:
-            year_word = "год"
-        elif 2 <= years <= 4:
-            year_word = "года"
-        else:
-            year_word = "лет"
+        for age_months in user_data['children']:
+            if age_months > 0:  # Пропускаем маркеры (0)
+                age_texts.append(format_age_months(age_months))
         
-        if remaining_months == 0:
-            return f"{years} {year_word}"
+        # Проверяем, есть ли реальные возрасты (не только маркеры)
+        if age_texts:
+            if children_count == 1:
+                response += f"👶 *Дети:* 1 ребенок ({', '.join(age_texts)})\n"
+            elif children_count in [2, 3, 4]:
+                response += f"👶 *Дети:* {children_count} ребенка ({', '.join(age_texts)})\n"
+            else:
+                response += f"👶 *Дети:* {children_count} детей ({', '.join(age_texts)})\n"
         else:
-            return f"{years} {year_word} {remaining_months} мес."
+            # Только маркеры количества (0) - возрастов нет
+            response += f"👶 *Дети:* {children_count} детей (возраст не указан)\n"
+    else:
+        response += "👶 *Дети:* нет\n"
+    
+    response += f"🤰 *Беременность:* {'Да ✨' if user_data.get('pregnant') else 'Нет'}\n"
+    
+    if user_data['priorities']:
+        response += f"🎯 *Важные моменты:* {', '.join(user_data['priorities'])}\n"
+    
+    if user_data['health_issues']:
+        response += f"🏥 *Учитываем здоровье:* {', '.join(user_data['health_issues'])}\n"
+    
+    response += "\n✅ *Всё верно или нужно что-то исправить?*"
+    
+    keyboard = [["✅ Да, всё верно", "✏️ Нет, исправить"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    
+    await update.message.reply_text(
+        response,
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+def get_smart_recommendations(user_data, current_category):
+    """Возвращает умные рекомендации в стиле Алекса на основе ограничений пользователя"""
+    
+    is_pregnant = user_data.get('pregnant', False)
+    children_ages = user_data.get('children', [])
+    has_young_children = any(age < 12 for age in children_ages)  # до 1 года
+    has_toddlers = any(12 <= age < 48 for age in children_ages)  # 1-4 года
+    has_older_children = any(age >= 48 for age in children_ages)  # от 4 лет
+    
+    recommendations = []
+    alex_style = "\n\n🎯 **Алекс рекомендует:**\n"
+    
+    # Проверяем ограничения
+    if is_pregnant:
+        alex_style += "✨ *Для беременных* — выбирайте только проверенные безопасные варианты!\n"
+        
+        if "Море" in current_category or "Яхты" in current_category:
+            recommendations.append("🌊 *Море* — увы, запрещены все морские туры")
+            recommendations.append("🏞️ *Суша (обзорные)* — идеально! Аватар, смотровые, горячие источники")
+            recommendations.append("🐘 *Суша (семейные)* — слоны, аквапарки, дельфинарий")
+            recommendations.append("🎭 *Вечерние шоу* — Сиам Нирамит, кабаре")
+        
+        elif "Рыбалка" in current_category:
+            recommendations.append("🎣 *Рыбалка* — только озерная (биг гейм нельзя!)")
+            recommendations.append("🏞️ *Суша* — отличная альтернатива")
+    
+    if has_young_children:  # Дети до 1 года
+        alex_style += "👶 *С малышами до года* — нужен особый подход и безопасность!\n"
+        
+        if "Море" in current_category:
+            recommendations.append("🌊 *Море* — малышам запрещены все морские программы")
+            recommendations.append("🐘 *Суша (семейные)* — вот где раздолье! Слоны, кормление птиц, океанариум")
+            recommendations.append("🏞️ *Суша (обзорные)* — Аватар, джипы, Као Лак сафари")
+            recommendations.append("👶 *Специально для малышей:* Кормление слонов, Парк птиц, Океанариум Aquaria")
+    
+    if has_toddlers:  # Дети 1-4 года
+        alex_style += "🧒 *С детками 1-4 года* — много интересных вариантов!\n"
+        
+        if "Море" in current_category:
+            recommendations.append("🌊 *Море* — можно, но будтьте внимательны, изучите подробно всю информацию о выбранной экскурсии")
+            recommendations.append("🛥️ *Яхты* — только частные аренды с условием безопасности")
+            recommendations.append("🐘 *Суша (семейные)* — идеально подходит!")
+    
+    # Если есть рекомендации - оформляем в стиле Алекса
+    if recommendations:
+        # Убираем дубликаты
+        unique_recs = []
+        for rec in recommendations:
+            if rec not in unique_recs:
+                unique_recs.append(rec)
+        
+        # Форматируем в стиле Алекса
+        alex_style += "\n💡 *Куда можно сходить вместо этого:*\n"
+        for rec in unique_recs:
+            alex_style += f"• {rec}\n"
+        
+        # Добавляем финальную фразу в стиле Алекса
+        alex_style += "\n_Давайте подберём что-то идеальное именно для вас! Просто выберите другую категорию или уточните пожелания._ ✨"
+        
+        return alex_style
+    
+    return ""  # Если рекомендаций нет
+
+async def handle_correction(update: Update, context: ContextTypes.DEFAULT_TYPE, correction_text):
+    """Обработка исправлений от пользователя"""
+    user_data = context.user_data.get('user_data', {})
+    
+    # Парсим то, что написал пользователь
+    parsed_data, _ = parse_user_response(correction_text)
+    
+    # === ОСОБАЯ ЛОГИКА ДЛЯ ИСПРАВЛЕНИЯ ДЕТЕЙ ===
+    # Если пользователь указал количество детей, но не указал возрасты
+    # И у нас уже были возрасты - распределяем возрасты
+    if parsed_data['children'] and len(parsed_data['children']) == 1 and parsed_data['children'][0] == 0:
+        # Пользователь указал только количество (маркер 0)
+        # Например: "2 ребенка" → children: [0], children_original: ['количество']
+        requested_count = len(parsed_data['children_original'])
+        
+        # Если у нас уже были возрасты
+        if user_data['children'] and any(age > 0 for age in user_data['children']):
+            existing_ages = [age for age in user_data['children'] if age > 0]
+            existing_originals = []
+            
+            # Собираем оригинальные тексты возрастов
+            for i, age in enumerate(user_data['children']):
+                if age > 0 and i < len(user_data['children_original']):
+                    existing_originals.append(user_data['children_original'][i])
+            
+            # Если запросили больше детей чем есть возрастов
+            if requested_count > len(existing_ages):
+                # Добавляем маркеры для недостающих детей
+                for _ in range(requested_count - len(existing_ages)):
+                    existing_ages.append(0)
+                    existing_originals.append('возраст не указан')
+            
+            # Обновляем данные
+            parsed_data['children'] = existing_ages[:requested_count]
+            parsed_data['children_original'] = existing_originals[:requested_count]
+    
+    # Если после исправления у нас есть дети с маркерами (0)
+    # Нужно уточнить возраст
+    if parsed_data['children'] and 0 in parsed_data['children']:
+        # Считаем сколько детей без возраста
+        children_without_age = parsed_data['children'].count(0)
+        
+        if children_without_age > 0:
+            response = f"✅ Запомнил: {len(parsed_data['children'])} детей\n\n"
+            response += f"❓ *Уточните возраст {children_without_age} ребенка:*\n"
+            
+            if children_without_age == 1:
+                response += "Напишите возраст ребенка (например: 3 года, 8 месяцев)\n"
+            else:
+                response += f"Напишите возраст каждого из {children_without_age} детей\n"
+                response += "Пример: '5 лет и 3 года' или '8 месяцев и 2 года'\n"
+            
+            # Сохраняем временные данные
+            save_partial_data(context, parsed_data)
+            
+            # Устанавливаем вопрос про детей
+            context.user_data['next_question'] = 'children'
+            
+            await update.message.reply_text(
+                response,
+                parse_mode='Markdown',
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return CONFIRMATION
+    
+    # Сохраняем исправления
+    save_partial_data(context, parsed_data)
+    
+    # Получаем обновлённые данные
+    current_data = context.user_data['user_data']
+    
+    # Проверяем, всё ли теперь поняли
+    current_missing = check_missing_points(current_data)
+    
+    if not current_missing:
+        # Всё поняли - показываем финальное подтверждение
+        await show_final_confirmation(update, context, current_data)
+    else:
+        # Ещё что-то не поняли - уточняем
+        await ask_for_clarification(update, context, current_data, current_missing)
+    
+    return CONFIRMATION
 
 # ==================== ФИЛЬТРАЦИЯ ЭКСКУРСИЙ ПО БЕЗОПАСНОСТИ ====================
 def filter_tours_by_safety(tours, user_data):
     """
-    Фильтрует экскурсии по критериям безопасности:
-    1. Беременность - исключает опасные экскурсии
-    2. Возраст детей - проверяет ограничения по возрасту
-    3. Проблемы со здоровьем
+    СТРОГАЯ фильтрация экскурсий по тегам безопасности из CSV.
+    Основывается ТОЛЬКО на столбце "Теги (Безопасность)".
     """
     filtered_tours = []
     
@@ -337,63 +639,82 @@ def filter_tours_by_safety(tours, user_data):
     health_issues = user_data.get('health_issues', [])
     
     for tour in tours:
-        # Проверяем, можно ли показывать эту экскурсию
         is_safe = True
+        tags = tour.get("Теги (Безопасность)", "").lower()
         
-        # 1. Проверка на беременность
+        # === 1. ПРОВЕРКА ДЛЯ БЕРЕМЕННЫХ ===
         if is_pregnant:
-            tour_name = tour.get("Название", "").lower()
-            tour_description = tour.get("Описание", "").lower()
-            
-            # Список опасных активностей для беременных
-            dangerous_keywords = ['аквапарк', 'дайвинг', 'серфинг', 'рафтинг', 'байк', 
-                                 'квадроцикл', 'сёрфинг', 'экстрим', 'экстремальн', 
-                                 'анимал шоу', 'глубокое море', 'шхуна', 'активные туры']
-            
-            for keyword in dangerous_keywords:
-                if keyword in tour_name or keyword in tour_description:
+            if "#нельзя_беременным" in tags:
+                is_safe = False
+            elif "#можно_беременным" not in tags and "#можно_всем" not in tags:
+                # Если нет явного разрешения для беременных - по умолчанию нельзя
+                is_safe = False
+        
+        # === 2. ПРОВЕРКА ВОЗРАСТА ДЕТЕЙ ===
+        if children_ages:
+            # Проверяем каждого ребенка на соответствие возрастным ограничениям
+            for age_months in children_ages:
+                child_safe = True
+                
+                # Если ребенок до 1 года (12 месяцев)
+                if age_months < 12:
+                    if "#дети_от_1_года" in tags or "#от_18_лет" in tags or "#дети_от_2_лет" in tags or \
+                       "#дети_от_3_лет" in tags or "#дети_от_4_лет" in tags or "#дети_от_7_лет" in tags or \
+                       "#дети_от_12_лет" in tags:
+                        child_safe = False
+                    elif "#можно_детям" not in tags and "#можно_всем" not in tags:
+                        # По умолчанию - если нет явного разрешения для детей
+                        child_safe = False
+                
+                # Проверка по конкретным возрастным ограничениям
+                elif 12 <= age_months < 24:  # 1-2 года
+                    if "#дети_от_2_лет" in tags or "#дети_от_3_лет" in tags or \
+                       "#дети_от_4_лет" in tags or "#дети_от_7_лет" in tags or \
+                       "#дети_от_12_лет" in tags or "#от_18_лет" in tags:
+                        child_safe = False
+                
+                elif 24 <= age_months < 36:  # 2-3 года
+                    if "#дети_от_3_лет" in tags or "#дети_от_4_лет" in tags or \
+                       "#дети_от_7_лет" in tags or "#дети_от_12_лет" in tags or \
+                       "#от_18_лет" in tags:
+                        child_safe = False
+                
+                elif 36 <= age_months < 48:  # 3-4 года
+                    if "#дети_от_4_лет" in tags or "#дети_от_7_лет" in tags or \
+                       "#дети_от_12_лет" in tags or "#от_18_лет" in tags:
+                        child_safe = False
+                
+                elif 48 <= age_months < 84:  # 4-7 лет
+                    if "#дети_от_7_лет" in tags or "#дети_от_12_лет" in tags or \
+                       "#от_18_лет" in tags:
+                        child_safe = False
+                
+                elif 84 <= age_months < 144:  # 7-12 лет
+                    if "#дети_от_12_лет" in tags or "#от_18_лет" in tags:
+                        child_safe = False
+                
+                elif 144 <= age_months < 216:  # 12-18 лет
+                    if "#от_18_лет" in tags:
+                        child_safe = False
+                
+                # Если хотя бы один ребенок не подходит - вся экскурсия не подходит
+                if not child_safe:
                     is_safe = False
                     break
         
-        # 2. Проверка возраста детей
-        if children_ages:
-            tour_category = tour.get("Для информации", "").lower()
-            tour_name = tour.get("Название", "").lower()
-            
-            # Для морских туров дети до 1 года - не рекомендуются
-            if any(age < 12 for age in children_ages):
-                if any(keyword in tour_category for keyword in ['море', 'остров', 'морск']):
-                    # Проверяем, есть ли явное предупреждение в названии
-                    if not any(keyword in tour_name for keyword in ['семейн', 'детск', 'мягк', 'комфорт']):
-                        is_safe = False
-            
-            # Проверяем минимальный возраст для определенных экскурсий
-            tour_min_age = tour.get("Мин. возраст", "")
-            if tour_min_age and tour_min_age.isdigit():
-                min_age_months = int(tour_min_age) * 12
-                if any(age < min_age_months for age in children_ages):
-                    is_safe = False
-        
-        # 3. Проверка проблем со здоровьем
+        # === 3. ПРОВЕРКА ПРОБЛЕМ СО ЗДОРОВЬЕМ ===
         if health_issues:
-            tour_description = tour.get("Описание", "").lower()
-            
-            # Если проблемы со спиной - исключаем длительные пешие туры
-            if 'спина' in health_issues and 'пешеход' in tour_description:
-                if 'легк' not in tour_description and 'коротк' not in tour_description:
+            # Проблемы со спиной - исключаем теги с нагрузкой
+            if 'спина' in health_issues:
+                if "#проблемы_спины" in tags or "#нагрузка" in tags:
                     is_safe = False
             
-            # Если проблемы с укачиванием - исключаем морские туры
+            # Укачивание - исключаем морские/скоростные туры
             if 'укачивание' in health_issues:
-                if any(keyword in tour_description for keyword in ['море', 'катер', 'яхт', 'паром', 'корабль']):
-                    is_safe = False
-            
-            # Если проблемы с ходьбой - исключаем пешие экскурсии
-            if 'ходьба' in health_issues:
-                if any(keyword in tour_description for keyword in ['пеший', 'пешком', 'ходьб', 'прогулк']):
+                if "#скорость" in tags or "#трясет" in tags or "#волны" in tags:
                     is_safe = False
         
-        # Если экскурсия безопасна - добавляем в результат
+        # === 4. ЕСЛИ ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ - ДОБАВЛЯЕМ ===
         if is_safe:
             filtered_tours.append(tour)
     
@@ -741,17 +1062,15 @@ def make_tours_keyboard(tours, offset=0, limit=5, show_question_button=True):
 # ==================== АНАЛИЗ ОТВЕТОВ ПОЛЬЗОВАТЕЛЯ ====================
 def parse_user_response(text):
     """
-    Анализирует ответ пользователя и извлекает структурированные данные.
-    Возвращает словарь с найденной информацией и список пропущенных пунктов.
+    Улучшенный анализатор ответов. Извлекает смысл из свободного текста.
     """
     text_lower = text.lower()
     
-    # Инициализируем структуру данных
     data = {
         'adults': 0,
-        'children': [],  # список возрастов детей В МЕСЯЦАХ
-        'children_original': [],  # оригинальные тексты возрастов для отображения
-        'pregnant': None,  # None = не указано, True/False = указано
+        'children': [],        # возрасты в месяцах
+        'children_original': [], # оригинальный текст возраста
+        'pregnant': None,      # None = не указано
         'priorities': [],
         'health_issues': [],
         'raw_text': text
@@ -759,78 +1078,168 @@ def parse_user_response(text):
     
     missing_points = []
     
-    # 1. Поиск количества взрослых (самый простой паттерн)
-    adult_patterns = [
-        r'(\d+)\s*взросл',  # "2 взрослых"
-        r'взросл[а-я]+\s*(\d+)',  # "взрослых 2"
-        r'(\d+)\s*взр',  # "2 взр"
-    ]
+    # ========== 1. СЛОВАРЬ ДЛЯ ПОИСКА ЧИСЛИТЕЛЬНЫХ ==========
+    number_words = {
+        'один': 1, 'одного': 1, 'одной': 1,
+        'два': 2, 'двое': 2, 'двух': 2,
+        'три': 3, 'трое': 3, 'трёх': 3, 'трех': 3,
+        'четыре': 4, 'четверо': 4, 'четырех': 4, 'четырёх': 4,
+        'пять': 5, 'пятеро': 5,
+        'шесть': 6, 'шестеро': 6,
+        'семь': 7, 'семеро': 7,
+        'восемь': 8, 'восьмеро': 8,
+        'девять': 9, 'девятеро': 9,
+        'десять': 10
+    }
     
-    adults_found = False
-    for pattern in adult_patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            data['adults'] = int(match.group(1))
-            adults_found = True
-            break
+    # ========== 2. НАХОДИМ ВСЕ ЧИСЛА И ЧИСЛИТЕЛЬНЫЕ В ТЕКСТЕ ==========
+    all_numbers = []
     
-    if not adults_found:
-        # Попробуем найти просто цифры в начале
-        match = re.search(r'^(\d+)\s', text_lower)
-        if match:
-            data['adults'] = int(match.group(1))
-            adults_found = True
+    # 2A. Ищем цифры (например, "5 лет")
+    digit_pattern = r'(\d+)(?:\s|$)'
+    for match in re.finditer(digit_pattern, text_lower):
+        num = int(match.group(1))
+        position = match.start()
+        # Запоминаем число и его позицию в тексте
+        all_numbers.append({'value': num, 'pos': position, 'type': 'digit'})
     
-    # 2. Поиск детей и их возрастов
-    # Обновленные паттерны для поддержки месяцев
-    child_patterns = [
-        r'(\d+)\s*ребен[а-я]+\s*(\d+)\s*(?:лет|год[а]?)\s*и\s*(\d+)\s*(?:лет|год[а]?)',  # "2 ребенка 5 лет и 7 лет"
-        r'(\d+)\s*ребен[а-я]+\s*(\d+)\s*и\s*(\d+)\s*(?:лет|год[а]?)',  # "2 ребенка 5 и 7 лет"
-        r'ребен[а-я]+\s*(\d+)\s*(?:лет|год[а]?)',  # "ребенок 5 лет"
-        r'дет[а-я]+\s*(\d+)\s*(?:лет|год[а]?)',  # "дети 5 лет"
-        r'(\d+)\s*годн?[а-я]*\s*ребен',  # "5-летний ребенка"
-        r'(\d+)\s*годн?[а-я]*\s*дет',  # "5-летний дет"
-        # Паттерны для месяцев
-        r'ребен[а-я]+\s*(\d+)\s*(?:месяц[а-я]*|мес\.?)',  # "ребенок 10 месяцев"
-        r'дет[а-я]+\s*(\d+)\s*(?:месяц[а-я]*|мес\.?)',  # "дети 10 месяцев"
-        r'ребен[а-я]+\s*(\d+)\s*(?:лет|год[а]?)\s*(\d+)\s*(?:месяц[а-я]*|мес\.?)',  # "ребенок 1 год 3 месяца"
-        r'дет[а-я]+\s*(\d+)\s*(?:лет|год[а]?)\s*(\d+)\s*(?:месяц[а-я]*|мес\.?)',  # "дети 1 год 3 месяца"
-    ]
+    # 2B. Ищем числительные (например, "двое взрослых")
+    for word, num in number_words.items():
+        pos = text_lower.find(word)
+        if pos != -1:
+            all_numbers.append({'value': num, 'pos': pos, 'type': 'word', 'word': word})
     
-    children_found = False
-    for pattern in child_patterns:
-        matches = re.findall(pattern, text_lower)
-        for match in matches:
-            if isinstance(match, tuple):
-                # Пропускаем первый элемент (количество детей), берём только возрасты
-                for age in match[1:]:
-                    if age and str(age).isdigit():
-                        months = age_to_months(age)
-                        if months > 0:
-                            data['children'].append(months)
-                            data['children_original'].append(str(age))
-                            children_found = True
-            elif isinstance(match, str) and match.isdigit():
-                months = age_to_months(match)
-                if months > 0:
-                    data['children'].append(months)
-                    data['children_original'].append(match)
-                    children_found = True
+    # Сортируем числа по их позиции в тексте (как они идут)
+    all_numbers.sort(key=lambda x: x['pos'])
     
-    # 3. Поиск беременности
-    pregnant_keywords = ['беременн', 'в положении', 'ожидаем']
+    # ========== 3. ОПРЕДЕЛЯЕМ, ЧТО ЗНАЧИТ КАЖДОЕ ЧИСЛО ==========
+    words = text_lower.split()
+    
+    for num_info in all_numbers:
+        num = num_info['value']
+        pos = num_info['pos']
+        
+        # Находим слово, которое стоит ПЕРЕД числом (контекст слева)
+        left_context = ""
+        if pos > 0:
+            # Берем часть текста ДО числа и берем последнее слово оттуда
+            text_before = text_lower[:pos]
+            if text_before.strip():
+                left_words = text_before.split()
+                if left_words:
+                    left_context = left_words[-1]
+        
+        # Находим слово, которое стоит ПОСЛЕ числа (контекст справа)
+        right_context = ""
+        text_after = text_lower[pos + len(str(num)):] if num_info['type'] == 'digit' else text_lower[pos + len(num_info['word']):]
+        if text_after.strip():
+            right_words = text_after.split()
+            if right_words:
+                right_context = right_words[0]
+        
+        # Анализируем контекст
+        # 3A. Если контекст говорит, что это ВЗРОСЛЫЙ
+        if ('взросл' in left_context or 'взросл' in right_context or
+            'взр' in left_context or 'взр' in right_context):
+            if data['adults'] == 0:  # берем только первое найденное количество
+                data['adults'] = num
+        
+        # 3B. Если контекст говорит, что это РЕБЕНОК или возраст
+        elif ('ребен' in left_context or 'ребен' in right_context or
+              'дет' in left_context or 'дет' in right_context or
+              'лет' in right_context or 'год' in right_context or 'г.' in right_context or
+              'мес' in right_context or 'месяц' in right_context):
+            
+            # === УЛУЧШЕННАЯ ЛОГИКА: АНАЛИЗИРУЕМ ФРАЗУ ЦЕЛИКОМ ===
+            # Берем фрагмент текста вокруг числа (примерно 10 слов)
+            word_list = text_lower.split()
+            try:
+                # Находим индекс текущего слова (числа или числительного)
+                current_word = str(num) if num_info['type'] == 'digit' else num_info['word']
+                idx = -1
+                for i, word in enumerate(word_list):
+                    if word == current_word or (word.isdigit() and int(word) == num):
+                        idx = i
+                        break
+                
+                if idx != -1:
+                    # Берем достаточно большой контекст для анализа
+                    start = max(0, idx - 5)
+                    end = min(len(word_list), idx + 6)
+                    context_phrase = ' '.join(word_list[start:end])
+                    
+                    # СНАЧАЛА проверяем, не комбинированный ли это возраст
+                    # Ищем паттерн "X лет/год(а) и Y месяцев" ВО ВСЕЙ фразе
+                    age_match = re.search(r'(\d+)\s*(?:лет|год[а]?|г\.?)\s*(?:и\s*)?(\d+)?\s*(?:месяц[а-я]*|мес\.?)', context_phrase)
+                    
+                    if age_match:
+                        # Это комбинированный возраст ВО ВСЕЙ ФРАЗЕ
+                        years = int(age_match.group(1))
+                        months = int(age_match.group(2)) if age_match.group(2) else 0
+                        total_months = years * 12 + months
+                        
+                        # Добавляем только если еще не добавляли этот возраст
+                        if total_months not in data['children']:
+                            data['children'].append(total_months)
+                            # Форматируем для отображения
+                            if months == 0:
+                                age_text = f"{years} год{'а' if years == 1 else 'а' if 2 <= years <= 4 else ''}"
+                            else:
+                                age_text = f"{years} год{'а' if years == 1 else 'а' if 2 <= years <= 4 else ''} и {months} месяц{'а' if months == 1 else 'ев' if 2 <= months <= 4 else 'ев'}"
+                            data['children_original'].append(age_text)
+                    
+                    # ЕСЛИ НЕ комбинированный - проверяем обычные варианты
+                    else:
+                        # Вариант 1: Возраст в годах ("5 лет", "1 год")
+                        if any(age_word in right_context for age_word in ['лет', 'год', 'г.']):
+                            months = age_to_months(f"{num} лет")
+                            if months > 0 and months not in data['children']:
+                                data['children'].append(months)
+                                data['children_original'].append(f"{num}")
+                        
+                        # Вариант 2: Возраст в месяцах ("6 месяцев")
+                        elif 'месяц' in right_context or 'мес' in right_context:
+                            months = num  # "6 месяцев" = 6 месяцев
+                            if months > 0 and months < 12 and months not in data['children']:
+                                data['children'].append(months)
+                                data['children_original'].append(f"{num} мес.")
+                        
+                        # Вариант 3: Особые указания "до 1 года"
+                        text_around = text_lower[max(0, pos-10):min(len(text_lower), pos+15)]
+                        if ('до' in text_around and ('год' in text_around or '1' in text_around)) or \
+                           ('менее' in text_around and 'год' in text_around) or \
+                           ('меньше' in text_around and 'год' in text_around):
+                            if 11 not in data['children']:  # 11 месяцев как маркер "до года"
+                                data['children'].append(11)
+                                data['children_original'].append('до 1 года')
+                        
+                        # Вариант 4: Если число стоит рядом с "ребенок"/"дети", но без указания возраста
+                        elif ('ребен' in left_context or 'ребен' in right_context or
+                              'дет' in left_context or 'дет' in right_context):
+                            if num < 18 and 0 not in data['children']:  # 0 = возраст не указан
+                                data['children'].append(0)
+                                data['children_original'].append('количество')
+            except Exception as e:
+                print(f"Ошибка парсинга возраста: {e}")
+                # Запасной вариант
+                if any(age_word in right_context for age_word in ['лет', 'год', 'г.']):
+                    months = age_to_months(f"{num} лет")
+                    if months > 0:
+                        data['children'].append(months)
+                        data['children_original'].append(f"{num}")
+    
+    # ========== 5. ПОИСК БЕРЕМЕННОСТИ, ПРИОРИТЕТОВ И ЗДОРОВЬЯ ==========
+    # (Эти блоки остаются почти как были, они работают хорошо)
+    pregnant_keywords = ['беременн', 'в положении', 'жду ребёнка', 'жду ребенка']
     not_pregnant_keywords = ['не беременн', 'нет беременн', 'не в положении']
     
     pregnant_mentioned = False
-    
-    # СНАЧАЛА проверяем ОТРИЦАНИЯ (это важно!)
     for keyword in not_pregnant_keywords:
         if keyword in text_lower:
             data['pregnant'] = False
             pregnant_mentioned = True
             break
     
-    # ЕСЛИ отрицаний не нашли, проверяем утверждения
     if not pregnant_mentioned:
         for keyword in pregnant_keywords:
             if keyword in text_lower:
@@ -838,13 +1247,12 @@ def parse_user_response(text):
                 pregnant_mentioned = True
                 break
     
-    # 4. Поиск приоритеты
+    # Приоритеты
     priority_keywords = {
         'комфорт': ['комфорт', 'удобств', 'плавн', 'мягк'],
         'бюджет': ['бюджет', 'дешев', 'эконом', 'недорог'],
         'фотографии': ['фото', 'сним', 'инстаграм', 'красив'],
         'не рано вставать': ['не рано', 'поспать', 'поздн', 'не люблю рано', 'не хочу рано'],
-        'без толп': ['без толп', 'мало людей', 'пуст', 'уединен'],
     }
     
     for priority, keywords in priority_keywords.items():
@@ -854,11 +1262,11 @@ def parse_user_response(text):
                     data['priorities'].append(priority)
                 break
     
-    # 5. Поиск проблем со здоровьем
+    # Проблемы со здоровьем
     health_keywords = {
-        'спина': ['спин', 'поясниц', 'позвоночн'],
-        'укачивание': ['укачиван', 'морск', 'тошн', 'качк'],
-        'ходьба': ['ходить', 'ног', 'ходьб', 'пешком трудн'],
+        'спина': ['спин', 'поясниц'],
+        'укачивание': ['укачиван', 'морск', 'тошн'],
+        'ходьба': ['ходьб', 'ходить трудн', 'ноги болят'],
     }
     
     for issue, keywords in health_keywords.items():
@@ -868,19 +1276,38 @@ def parse_user_response(text):
                     data['health_issues'].append(issue)
                 break
     
-    # 6. Определяем, что пропущено (для уточняющих вопросов)
+    # ========== 6. ПРОВЕРКА, ЧТО ПРОПУЩЕНО ==========
     if data['adults'] == 0:
         missing_points.append("количество взрослых")
     
     if data['pregnant'] is None:
         missing_points.append("беременность (да/нет)")
     
-    # Если есть взрослые, но нет информации о детях - тоже пропущено
-    # ИЛИ если взрослые не указаны, но и про детей ничего не сказано - тоже спрашиваем
-    if (data['adults'] > 0 and not children_found) or (data['adults'] == 0):
-        # Проверим, может пользователь написал "без детей" или "нет детей"
-        if 'без детей' not in text_lower and 'нет детей' not in text_lower:
+    # Проверяем информацию о детях
+    if any('ребен' in word or 'дет' in word for word in words):
+        # Если упомянули детей, но возрастов нет и не написали "без детей"
+        if not data['children'] and 'без детей' not in text_lower and 'нет детей' not in text_lower:
             missing_points.append("информация о детях")
+    elif data['adults'] > 0:
+        # Если взрослые есть, но о детях ничего не сказано — спрашиваем
+        missing_points.append("информация о детях")
+
+    # ========== 7. УДАЛЯЕМ ДУБЛИКАТЫ ВОЗРАСТОВ ==========
+    # Если есть и конкретные возрасты, и маркер "количество" (0) - удаляем маркер
+    if 0 in data['children'] and len(data['children']) > 1:
+        data['children'] = [age for age in data['children'] if age != 0]
+        data['children_original'] = [age for age in data['children_original'] if age != 'количество']
+    
+    # Удаляем дубликаты (если один и тот же возраст попал несколько раз)
+    unique_ages = []
+    unique_originals = []
+    for age, original in zip(data['children'], data['children_original']):
+        if age not in unique_ages:
+            unique_ages.append(age)
+            unique_originals.append(original)
+    
+    data['children'] = unique_ages
+    data['children_original'] = unique_originals
     
     return data, missing_points
 
@@ -940,14 +1367,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь выбрал категорию"""
     user_choice = update.message.text
-    context.user_data['category'] = user_choice
-
-# === АНАЛИТИКА: ВЫБОР КАТЕГОРИИ ===
+    
+    # === АНАЛИТИКА: ВЫБОР КАТЕГОРИИ ===
     user = update.effective_user
     track_user_session(context, BOT_STAGES['category_selection'], {'category': user_choice})
     logger.log_action(user.id, "chose_category", stage=BOT_STAGES['category_selection'], category=user_choice)
     context.user_data['last_action'] = 'category_choice'
     # === КОНЕЦ АНАЛИТИКИ ===
+    
+    # Проверяем, если уже есть данные о пользователе
+    if 'user_data' in context.user_data:
+        user_data = context.user_data.get('user_data', {})
+        is_pregnant = user_data.get('pregnant', False)
+        children_ages = user_data.get('children', [])
+        has_young_children = any(age < 12 for age in children_ages)
+        
+        # Если беременность или дети до года И выбрано Море
+        if (is_pregnant or has_young_children) and "Море" in user_choice:
+            response = "⚠️ *Внимание!*\n\n"
+            
+            if is_pregnant:
+                response += "🤰 *Беременным* = ❌ **ВСЕ** морские туры\n"
+            
+            if has_young_children:
+                response += "👶 *Детям до года* = ❌ **ВСЕ** морские туры\n"
+            
+            response += "\n🎯 *Лучше выбрать:*\n"
+            response += "• 🏞️ *Суша (обзорные)* — Аватар, смотровые\n"
+            response += "• 🐘 *Суша (семейные)* — слоны, аквапарк\n"
+            response += "• 🎭 *Вечерние шоу* — Сиам Нирамит\n\n"
+            
+            response += "*Продолжить с Морем или выбрать другую категорию?*"
+            
+            keyboard = [
+                ["🌊 Продолжить с Морем (скорее всего пусто)"],
+                ["🔄 Выбрать другую категорию"]
+            ]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+            
+            await update.message.reply_text(
+                response,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            
+            # Сохраняем выбор категории, но ждём подтверждения
+            context.user_data['pending_category'] = user_choice
+            return CATEGORY  # Остаёмся в выборе категории
+    
+    # Если нет ограничений или не Море - продолжаем как обычно
+    context.user_data['category'] = user_choice
     
     # Сохраняем экскурсии этой категории
     category_tours = [t for t in TOURS if t.get("Для информации", "") == user_choice]
@@ -972,7 +1441,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += "Давайте я подберу для вас лучшие варианты.\n\n"
     
     response += "Но сначала мне нужно уточнить несколько деталей:\n\n"
-    response += "1️⃣ *Состав группы:* Сколько взрослых и детей? Укажите возраст каждого ребенка (например: 5 лет, 1 год 3 месяца, 10 месяцев).\n"
+    response += "1️⃣ *Состав группы:* Сколько взрослых и детей? Укажите возраст каждого ребенка (например: 8 лет, 3 года, менее 1 года).\n"
     response += "2️⃣ *Беременность:* Есть ли беременные в группе?\n"
     response += "3️⃣ *Что важно:* Комфорт, бюджет, фотографии, не любите рано вставать?\n"
     response += "4️⃣ *Здоровье:* Проблемы со спиной, укачивание, сложности с ходьбой?\n\n"
@@ -984,97 +1453,379 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown',
         reply_markup=ReplyKeyboardRemove()
     )
+    
     return QUALIFICATION
+
+async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора после предупреждения о море"""
+    user_choice = update.message.text
+    
+    if user_choice == "🌊 Продолжить с Морем":
+        # Берём сохранённую категорию
+        category = context.user_data.get('pending_category', 'Море (Острова)')
+        context.user_data['category'] = category
+        
+        # Продолжаем стандартный процесс - вызываем handle_category с категорией
+        # Нужно немного изменить логику, давай сделаем так:
+        response = f"Отлично! Выбрана категория: *{category}*\n\n"
+        
+        # Сохраняем экскурсии этой категории
+        category_tours = [t for t in TOURS if t.get("Для информации", "") == category]
+        context.user_data['filtered_tours'] = category_tours
+        
+        # Считаем хиты в категории
+        hit_tours = [t for t in category_tours if "ХИТ" in t.get("Название", "")]
+        
+        if hit_tours:
+            hit_count = len(hit_tours)
+            if hit_count == 1:
+                hit_text = "1 *ХИТ*"
+            elif hit_count in [2, 3, 4]:
+                hit_text = f"{hit_count} *ХИТА*"
+            else:
+                hit_text = f"{hit_count} *ХИТОВ*"
+            response += f"В этой категории у нас есть {hit_text}! 🏆\n"
+            response += "Давайте я подберу для вас самые популярные варианты.\n\n"
+        else:
+            response += "Давайте я подберу для вас лучшие варианты.\n\n"
+        
+        response += "Но сначала мне нужно уточнить несколько деталей:\n\n"
+        response += "1️⃣ *Состав группы:* Сколько взрослых и детей? Укажите возраст каждого ребенка (например: 8 лет, 3 года, менее 1 года).\n"
+        response += "2️⃣ *Беременность:* Есть ли беременные в группе?\n"
+        response += "3️⃣ *Что важно:* Комфорт, бюджет, фотографии, не любите рано вставать?\n"
+        response += "4️⃣ *Здоровье:* Проблемы со спиной, укачивание, сложности с ходьбой?\n\n"
+        response += "Ответьте, пожалуйста, одним сообщением. Например:\n"
+        response += "_«2 взрослых, ребенок 5 лет, не беременны, хотим комфорт и не рано вставать»_"
+        
+        await update.message.reply_text(
+            response,
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        # Убираем pending_category
+        if 'pending_category' in context.user_data:
+            del context.user_data['pending_category']
+        
+        return QUALIFICATION
+    
+    elif user_choice == "🔄 Выбрать другую категорию":
+        # Показываем категории заново
+        await update.message.reply_text(
+            "🔄 Выбирайте категорию:",
+            reply_markup=make_category_keyboard()
+        )
+        
+        # Убираем pending_category
+        if 'pending_category' in context.user_data:
+            del context.user_data['pending_category']
+        
+        return CATEGORY
 
 async def handle_qualification(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Пользователь ответил на вопросы - анализируем и уточняем при необходимости"""
     user_text = update.message.text
-    context.user_data['qualification_raw'] = user_text
-
-# === АНАЛИТИКА: ОБРАБОТКА ДАННЫХ ПОЛЬЗОВАТЕЛЯ ===
+    
+    # === АНАЛИТИКА ===
     user = update.effective_user
     track_user_session(context, BOT_STAGES['data_collection'])
     logger.log_action(user.id, "provided_user_data", stage=BOT_STAGES['data_collection'])
     context.user_data['last_action'] = 'user_data_input'
-    # === КОНЕЦ АНАЛИТИКИ ===
     
     # Анализируем ответ
     user_data, missing_points = parse_user_response(user_text)
-    context.user_data['user_data'] = user_data
     
-    # Проверяем, все ли обязательные пункты заполнены
-    mandatory_points = ["количество взрослых", "беременность (да/нет)", "информация о детях"]
+    # Сохраняем частичные данные
+    save_partial_data(context, user_data)
+    
+    # Получаем текущие данные
+    current_data = context.user_data['user_data']
+    
+    # Проверяем, что ещё не поняли
+    current_missing = check_missing_points(current_data)
+    
+    # Если всё поняли - показываем финальное подтверждение
+    if not current_missing:
+        await show_final_confirmation(update, context, current_data)
+        return CONFIRMATION
+    
+    # Если что-то не поняли - уточняем
+    await ask_for_clarification(update, context, current_data, current_missing)
+    return CONFIRMATION
 
-    # Список действительно пропущенных обязательных пунктов
-    really_missing = [point for point in mandatory_points if point in missing_points]
+async def handle_adults_clarification(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text, user_data):
+    """Обработка уточнения количества взрослых"""
+    import re
     
-    if really_missing:
-        # Формируем уточняющий вопрос
-        response = "🤔 Спасибо за информацию! Чтобы подобрать безопасные варианты, мне нужно уточнить:\n\n"
+    # Словарь числительных
+    number_words = {
+        'один': 1, 'одного': 1, 'одной': 1,
+        'два': 2, 'двое': 2, 'двух': 2,
+        'три': 3, 'трое': 3, 'трёх': 3, 'трех': 3,
+        'четыре': 4, 'четверо': 4, 'четырех': 4, 'четырёх': 4,
+        'пять': 5, 'пятеро': 5,
+        'шесть': 6, 'шестеро': 6,
+        'семь': 7, 'семеро': 7,
+        'восемь': 8, 'восьмеро': 8,
+        'девять': 9, 'девятеро': 9,
+        'десять': 10
+    }
+    
+    text_lower = user_text.lower()
+    
+    # 1. Ищем цифры
+    numbers = re.findall(r'\d+', user_text)
+    if numbers:
+        adults = int(numbers[0])
+    
+    # 2. Ищем числительные
+    elif any(word in text_lower for word in number_words.keys()):
+        for word, num in number_words.items():
+            if word in text_lower:
+                adults = num
+                break
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, укажите число взрослых (например: '2', 'двое', 'нас трое')",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CONFIRMATION
+    
+    user_data['adults'] = adults
+    response = f"✅ Запомнил: {adults} взрослых\n"
+    
+    # Убираем вопрос
+    if 'next_question' in context.user_data:
+        del context.user_data['next_question']
+    
+    # Проверяем, всё ли поняли
+    current_missing = check_missing_points(user_data)
+    
+    if not current_missing:
+        await show_final_confirmation(update, context, user_data)
+    else:
+        await ask_for_clarification(update, context, user_data, current_missing)
+    
+    return CONFIRMATION
+
+async def handle_children_clarification(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text, user_data):
+    """Обработка уточнения информации о детях"""
+    parsed_data, _ = parse_user_response(user_text)
+    
+    if parsed_data['children'] or "нет" in user_text.lower() or "без" in user_text.lower():
+        # Сохраняем данные о детях
+        save_partial_data(context, parsed_data)
         
-        for i, point in enumerate(really_missing, 1):
-            if point == "количество взрослых":
-                response += f"{i}️⃣ *Сколько взрослых* в вашей группе?\n"
-            elif point == "беременность (да/нет)":
-                response += f"{i}️⃣ *Есть ли беременные* в группе? (Это важно для безопасности!)\n"
-            elif point == "информация о детях":
-                response += f"{i}️⃣ *Есть ли дети*? Если да, укажите возраст каждого ребенка (например: 5 лет, 1 год 3 месяца).\n"
+        # Убираем вопрос
+        if 'next_question' in context.user_data:
+            del context.user_data['next_question']
         
-        response += "\nПожалуйста, ответьте на эти вопросы, например:\n"
-        response += "_«2 взрослых, не беременны, детей нет»_"
+        # Проверяем, всё ли поняли
+        current_data = context.user_data['user_data']
+        current_missing = check_missing_points(current_data)
+        
+        if not current_missing:
+            await show_final_confirmation(update, context, current_data)
+        else:
+            await ask_for_clarification(update, context, current_data, current_missing)
+        
+        return CONFIRMATION
+    
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, укажите возраст детей или напишите 'нет детей' (например: 5 лет, 3 года, 6 месяцев)",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CONFIRMATION
+
+async def handle_pregnant_clarification(update: Update, context: ContextTypes.DEFAULT_TYPE, user_text, user_data):
+    """Обработка уточнения беременности"""
+    text_lower = user_text.lower()
+    
+    if any(word in text_lower for word in ['да', 'беремен', 'в положении', 'жду']):
+        user_data['pregnant'] = True
+        response = "✅ Запомнил: есть беременные\n"
+    elif any(word in text_lower for word in ['нет', 'не беремен', 'не в положении']):
+        user_data['pregnant'] = False
+        response = "✅ Запомнил: нет беременных\n"
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, ответьте Да или Нет: есть ли беременные в группе?",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CONFIRMATION
+    
+    # Убираем вопрос
+    if 'next_question' in context.user_data:
+        del context.user_data['next_question']
+    
+    # Проверяем, всё ли поняли
+    current_missing = check_missing_points(user_data)
+    
+    if not current_missing:
+        await show_final_confirmation(update, context, user_data)
+    else:
+        await ask_for_clarification(update, context, user_data, current_missing)
+    
+    return CONFIRMATION
+
+async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора из кнопок подтверждения"""
+    user_choice = update.message.text
+    user_data = context.user_data.get('user_data', {})
+    
+    if user_choice == "✅ Да, всё верно":
+        # ВСЁ заполнено - показываем экскурсии
+        return await proceed_to_tours(update, context, user_data)
+    
+    elif user_choice == "✏️ Нет, исправить":
+        # Возвращаемся к вводу данных
+        response = "✏️ *Хорошо, давайте исправим!*\n\n"
+        response += "Напишите, *что именно* нужно исправить:\n\n"
+        response += "👨‍👩‍👧‍👦 *Количество взрослых:* '2 взрослых', 'нас трое', 'взрослых 1'\n"
+        response += "👶 *Информация о детях:* '2 детей: 5 лет и 3 года', '1 ребенок 2 года', 'нет детей'\n"
+        response += "🤰 *Беременность:* 'нет беременности', 'беременна'\n"
+        response += "🎯 *Что важно:* 'комфорт', 'бюджет', 'не рано вставать'\n"
+        response += "🏥 *Здоровье:* 'спина', 'укачивание'\n\n"
+        response += "*Примеры:*\n"
+        response += "• 'исправьте: взрослых 2, нет детей'\n"
+        response += "• 'дети: 5 лет и 3 года'\n"
+        response += "• 'беременности нет, хотим комфорт'\n\n"
+        response += "*Просто напишите исправления — я всё пойму!*"
+    
+        # Устанавливаем флаг, что сейчас будет исправление
+        context.user_data['waiting_for_correction'] = True
+    
+        await update.message.reply_text(
+            response,
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CONFIRMATION  # Остаёмся в CONFIRMATION, а не возвращаемся в QUALIFICATION
+
+    elif user_choice == "🔄 Выбрать другую категорию":
+        # Возврат к выбору категории
+        await update.message.reply_text(
+            "🔄 Возвращаюсь к выбору категории...",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        await update.message.reply_text(
+            "Выберите категорию экскурсий:",
+            reply_markup=make_category_keyboard()
+        )
+        return CATEGORY
+
+    elif user_choice == "✏️ Изменить параметры":
+        # Возврат к уточнению параметров
+        await update.message.reply_text(
+            "Давайте уточним параметры поиска:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        # Показываем текущие данные и спрашиваем что изменить
+        current_data = context.user_data.get('user_data', {})
+        current_missing = check_missing_points(current_data)
+        await ask_for_clarification(update, context, current_data, current_missing)
+        return CONFIRMATION
+
+    elif user_choice == "📋 Показать все":
+        # Показываем все экскурсии без фильтрации
+        category = context.user_data.get('category', 'неизвестно')
+        category_tours = context.user_data.get('filtered_tours', [])
+        
+        context.user_data['ranked_tours'] = category_tours
+        context.user_data['tour_offset'] = 0
+        
+        response = f"📋 *Все экскурсии категории {category} ({len(category_tours)} вариантов):*\n"
+        response += "⚠️ *Внимание:* Некоторые экскурсии могут не подходить по вашим критериям\n\n"
         
         await update.message.reply_text(
             response,
-            parse_mode='Markdown'
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
         )
-        return QUALIFICATION  # Остаёмся в этом же состоянии для уточнений
+        
+        await update.message.reply_text(
+            "Выберите экскурсию для подробностей:",
+            reply_markup=make_tours_keyboard(category_tours, 0, 5, show_question_button=True)
+        )
+        
+        return TOUR_DETAILS
+
+async def handle_clarification_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик уточняющих ответов пользователя"""
+    user_text = update.message.text
+
+    # Проверяем, не это ли исправление после кнопки "✏️ Нет, исправить"
+    if context.user_data.get('waiting_for_correction'):
+        # Убираем флаг
+        del context.user_data['waiting_for_correction']
+        
+        # Обрабатываем исправление
+        return await handle_correction(update, context, user_text)
     
-    # ВСЁ заполнено - можно показывать экскурсии!
+    next_question = context.user_data.get('next_question')
+    
+    if not next_question:
+        # Если нет активного вопроса, значит пользователь просто написал что-то
+        # Парсим это как новые данные
+        parsed_data, _ = parse_user_response(user_text)
+        save_partial_data(context, parsed_data)
+        
+        # Проверяем, всё ли поняли
+        current_data = context.user_data['user_data']
+        current_missing = check_missing_points(current_data)
+        
+        if not current_missing:
+            await show_final_confirmation(update, context, current_data)
+        else:
+            await ask_for_clarification(update, context, current_data, current_missing)
+        
+        return CONFIRMATION
+    
+    # Обрабатываем ответ на конкретный вопрос
+    user_data = context.user_data.get('user_data', {})
+    
+    if next_question == 'adults':
+        return await handle_adults_clarification(update, context, user_text, user_data)
+    elif next_question == 'children':
+        return await handle_children_clarification(update, context, user_text, user_data)
+    elif next_question == 'pregnant':
+        return await handle_pregnant_clarification(update, context, user_text, user_data)
+    
+    return CONFIRMATION
+    
+    # Обрабатываем ответ на конкретный вопрос
+    user_data = context.user_data.get('user_data', {})
+    
+    if next_question == 'adults':
+        return await handle_adults_clarification(update, context, user_text, user_data)
+    elif next_question == 'children':
+        return await handle_children_clarification(update, context, user_text, user_data)
+    elif next_question == 'pregnant':
+        return await handle_pregnant_clarification(update, context, user_text, user_data)
+    
+    return CONFIRMATION
+
+async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик подтверждения данных"""
+    # Перенаправляем либо на обработку кнопок, либо на уточнение
+    user_text = update.message.text
+    
+    # === АНАЛИТИКА ===
+    user = update.effective_user
+    track_user_session(context, BOT_STAGES['data_collection'])
+    logger.log_action(user.id, "confirmed_data", stage=BOT_STAGES['data_collection'])
+    context.user_data['last_action'] = 'data_confirmation'
+    
+    if user_text in ["✅ Да, всё верно", "✏️ Нет, исправить"]:
+        return await handle_confirmation_choice(update, context)
+    else:
+        return await handle_clarification_response(update, context)
+
+async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data):
+    """Переход к показу экскурсий после подтверждения всех данных"""
     category = context.user_data.get('category', 'неизвестно')
     category_tours = context.user_data.get('filtered_tours', [])
-    
-    # Формируем сводку
-    response = f"✅ *Отлично! Всё понял.*\n\n"
-    response += f"*Категория:* {category}\n"
-    response += f"*Состав группы:* {user_data['adults']} взрослых"
-    
-    if user_data['children']:
-        # Форматируем возрасты для отображения (с округлением в меньшую сторону)
-        age_texts = []
-        for months in user_data['children']:
-            age_texts.append(format_age_months(months))
-        
-        ages_display = ', '.join(age_texts)
-        children_count = len(user_data['children'])
-        # Правильное склонение
-        if children_count == 1:
-            children_text = "1 ребенок"
-        elif children_count in [2, 3, 4]:
-            children_text = f"{children_count} ребенка"
-        else:
-            children_text = f"{children_count} детей"
-        response += f", {children_text} ({ages_display})"
-        
-        # Проверяем есть ли дети до 1 года (опасно для морских туров)
-        infants = [age for age in user_data['children'] if age < 12]
-        if infants and any(cat in category.lower() for cat in ['море', 'остров', 'морск']):
-            response += "\n\n⚠️ *Внимание:* Детям до 1 года морские экскурсии не рекомендуются для безопасности."
-    else:
-        response += ", детей нет"
-    
-    if user_data['pregnant'] is None:
-        pregnancy_text = 'Не указано'
-    else:
-        pregnancy_text = 'Есть' if user_data['pregnant'] else 'Нет'
-    response += f"\n*Беременность:* {pregnancy_text}"
-    
-    if user_data['priorities']:
-        response += f"\n*Важные моменты:* {', '.join(user_data['priorities'])}"
-    
-    if user_data['health_issues']:
-        response += f"\n*Учтём здоровье:* {', '.join(user_data['health_issues'])}"
-    
-    response += "\n\n🔍 *Ищем идеальные варианты для вас...*\n"
     
     # 1. Фильтруем по безопасности
     safe_tours = filter_tours_by_safety(category_tours, user_data)
@@ -1088,22 +1839,77 @@ async def handle_qualification(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data['tour_offset'] = 0
     
     if not ranked_tours:
-        response += "\n❌ *К сожалению, по вашим критериям не найдено подходящих экскурсий.*\n"
-        response += "Попробуйте:\n"
-        response += "• Изменить параметры поиска\n"
-        response += "• Выбрать другую категорию\n"
-        response += "• Написать /start чтобы начать заново"
+        response = "😔 *Ой-ой! С этими параметрами в \"Море\" не подходит ничего.*\n\n"
         
-        await update.message.reply_text(response, parse_mode='Markdown')
-        return ConversationHandler.END
+        # Определяем причины
+        is_pregnant = user_data.get('pregnant', False)
+        children_ages = user_data.get('children', [])
+        has_young_children = any(age < 12 for age in children_ages)
+        
+        response += "⚡️ *Железное правило:*\n"
+        if is_pregnant:
+            response += "🤰 Беременность = ❌ **ВСЕ** морские туры\n"
+        if has_young_children:
+            response += "👶 Дети до года = ❌ **ВСЕ** морские туры\n"
+        
+        response += "\n🎯 *Алекс рекомендует смотреть тут:*\n"
+        response += "🏞️ *Суша (обзорные)* — Аватар, смотровые, источники\n"
+        response += "🐘 *Суша (семейные)* — слоны, аквапарк, океанариум\n"
+        response += "🎭 *Вечерние шоу* — Сиам Нирамит, кабаре\n\n"
+        
+        response += "👉 *Выбирайте:*"
+        
+        # Создаем кнопки для выбора
+        keyboard = [
+            ["🔄 Подобрать из рекомендованных"],
+            ["✏️ Уточнить параметры"],
+            ["📋 Только ознакомиться с морскими"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+        
+        await update.message.reply_text(
+            response,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+        return CONFIRMATION  # Остаемся в состоянии подтверждения для обработки кнопок
     
-    response += f"\n✅ *Найдено {len(ranked_tours)} подходящих экскурсий!*\n"
+    # Если экскурсии найдены - показываем их
+    response = f"✅ *Отлично! Всё понял.*\n\n"
+    response += f"*Категория:* {category}\n"
+    response += f"*Состав группы:* {user_data['adults']} взрослых"
+    
+    if user_data['children']:
+        children_count = len(user_data['children'])
+        age_texts = [format_age_months(months) for months in user_data['children']]
+        
+        if children_count == 1:
+            children_text = "1 ребенок"
+        elif children_count in [2, 3, 4]:
+            children_text = f"{children_count} ребенка"
+        else:
+            children_text = f"{children_count} детей"
+        
+        response += f", {children_text} ({', '.join(age_texts)})"
+    
+    response += f"\n*Беременность:* {'Есть' if user_data.get('pregnant') else 'Нет'}"
+    
+    if user_data.get('priorities'):
+        response += f"\n*Важные моменты:* {', '.join(user_data['priorities'])}"
+    
+    response += f"\n\n🔍 *Найдено {len(ranked_tours)} подходящих экскурсий!*\n"
     response += f"\n📋 *Топ-{min(5, len(ranked_tours))} рекомендованных вариантов:*"
     
-    # Показываем клавиатуру с экскурсиями
     await update.message.reply_text(
         response,
         parse_mode='Markdown',
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    # Показываем клавиатуру с экскурсиями
+    await update.message.reply_text(
+        "Выберите экскурсию для подробностей:",
         reply_markup=make_tours_keyboard(ranked_tours, 0, 5)
     )
     
@@ -1696,15 +2502,29 @@ def main():
     # Создаем приложение
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30.0).read_timeout(30.0).build()
     
-    # Настройка диалога
+# Настройка диалога
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             CATEGORY: [
+                MessageHandler(
+                    filters.Regex(r'^(🌊 Продолжить с Морем|🔄 Выбрать другую категорию)$'), 
+                    handle_category_choice
+                ),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category)
             ],
             QUALIFICATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_qualification)
+            ],
+            CONFIRMATION: [  # ДОБАВЛЯЕМ ОБА ОБРАБОТЧИКА
+                MessageHandler(
+                    filters.Regex(r'^(✅ Да, всё верно|✏️ Нет, исправить)$'), 
+                    handle_confirmation
+                ),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND, 
+                    handle_confirmation
+                )
             ],
             TOUR_DETAILS: [
                 CallbackQueryHandler(handle_tour_selection)
@@ -1712,8 +2532,8 @@ def main():
             QUESTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question)
             ],
-         },
-         fallbacks=[CommandHandler("cancel", cancel)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
     )
     
     # Добавляем обработчики
