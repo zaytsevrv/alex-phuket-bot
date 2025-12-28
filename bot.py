@@ -1051,10 +1051,10 @@ def make_tours_keyboard(tours, offset=0, limit=5, show_question_button=True):
     # Кнопки навигации
     nav_buttons = []
     if offset > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"prev_{offset-limit}"))
+        nav_buttons.append(InlineKeyboardButton("◀️ Предыдущие", callback_data=f"prev_{offset-limit}"))
     
     if offset + limit < len(tours):
-        nav_buttons.append(InlineKeyboardButton("Вперед ▶️", callback_data=f"next_{offset+limit}"))
+        nav_buttons.append(InlineKeyboardButton("Показать ещё ▶️", callback_data=f"next_{offset+limit}"))
     
     if nav_buttons:
         keyboard.append(nav_buttons)
@@ -1679,30 +1679,8 @@ async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, u
         return CONFIRMATION  # Остаемся в состоянии подтверждения для обработки кнопок
     
     # Если экскурсии найдены - показываем их
-    response = f"✅ *Отлично! Всё понял.*\n\n"
-    response += f"*Категория:* {category}\n"
-    response += f"*Состав группы:* {user_data['adults']} взрослых"
-    
-    if user_data['children']:
-        children_count = len(user_data['children'])
-        age_texts = [format_age_months(months) for months in user_data['children']]
-        
-        if children_count == 1:
-            children_text = "1 ребенок"
-        elif children_count in [2, 3, 4]:
-            children_text = f"{children_count} ребенка"
-        else:
-            children_text = f"{children_count} детей"
-        
-        response += f", {children_text} ({', '.join(age_texts)})"
-    
-    response += f"\n*Беременность:* {'Есть' if user_data.get('pregnant') else 'Нет'}"
-    
-    if user_data.get('priorities'):
-        response += f"\n*Важные моменты:* {', '.join(user_data['priorities'])}"
-    
-    response += f"\n\n🔍 *Найдено {len(ranked_tours)} подходящих экскурсий!*\n"
-    response += f"\n📋 *Топ-{min(5, len(ranked_tours))} рекомендованных вариантов:*"
+    response = f"🎉 *Отлично! Нашёл {len(ranked_tours)} подходящих экскурсий в категории {category}*\n\n"
+    response += f"📋 *Топ-{min(3, len(ranked_tours))} лучших вариантов:*"
     
     await update.message.reply_text(
         response,
@@ -1713,7 +1691,7 @@ async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, u
     # Показываем клавиатуру с экскурсиями
     await update.message.reply_text(
         "Выберите экскурсию для подробностей:",
-        reply_markup=make_tours_keyboard(ranked_tours, 0, 5)
+        reply_markup=make_tours_keyboard(ranked_tours, 0, 3)
     )
     
     return TOUR_DETAILS
@@ -1788,7 +1766,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Обновляем список
         await query.edit_message_reply_markup(
-            reply_markup=make_tours_keyboard(ranked_tours, offset, 5)
+            reply_markup=make_tours_keyboard(ranked_tours, offset, 3)
         )
     
     elif callback_data == "back_to_list_0":
@@ -1799,7 +1777,7 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(
             text=f"📋 *Доступные экскурсии ({len(ranked_tours)} вариантов):*",
             parse_mode='Markdown',
-            reply_markup=make_tours_keyboard(ranked_tours, offset, 5)
+            reply_markup=make_tours_keyboard(ranked_tours, offset, 3)
         )
     
     elif callback_data == "change_category":
