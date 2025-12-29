@@ -2008,7 +2008,11 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         deepseek_comment = format_deepseek_answer(deepseek_comment)
         
+        # 📍 ФАЗА 1 ИСПРАВЛЕНИЕ: РАЗБИВАЕМ НА ОТДЕЛЬНЫЕ СООБЩЕНИЯ
+        
+        # СООБЩЕНИЕ 1: DeepSeek комментарий ОТДЕЛЬНО
         await update.message.reply_text(deepseek_comment, parse_mode='Markdown')
+        await asyncio.sleep(0.3)
         
         tours_to_show = categories_with_tours[first_category]
         
@@ -2026,12 +2030,16 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['ranked_tours'] = tours_to_show
         context.user_data['tour_offset'] = 0
         
-        # Показываем только первые 3 хита (или все туры если меньше 3)
+        # СООБЩЕНИЯ 2-4: КАЖДЫЙ ТУР В ОТДЕЛЬНОМ СООБЩЕНИИ (только топ-3)
         tours_first_batch = tours_to_show[:3]
+        for tour in tours_first_batch:
+            tour_text = format_tour_description_alex_style(tour)
+            await update.message.reply_text(tour_text, parse_mode='Markdown')
+            await asyncio.sleep(0.3)
         
+        # СООБЩЕНИЕ 5: КНОПКИ ОТДЕЛЬНО
         await update.message.reply_text(
-            format_tours_group(tours_first_batch),
-            parse_mode='HTML',
+            "Выберите экскурсию:",
             reply_markup=make_tours_keyboard(tours_to_show, show_question_button=True)
         )
         
