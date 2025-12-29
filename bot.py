@@ -2030,16 +2030,30 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['ranked_tours'] = tours_to_show
         context.user_data['tour_offset'] = 0
         
-        # СООБЩЕНИЯ 2-4: КАЖДЫЙ ТУР В ОТДЕЛЬНОМ СООБЩЕНИИ (только топ-3)
+        # СООБЩЕНИЯ 2-4: КАЖДЫЙ ТУР В ОТДЕЛЬНОМ СООБЩЕНИИ (только топ-3) С КНОПКАМИ
         tours_first_batch = tours_to_show[:3]
         for tour in tours_first_batch:
             tour_text = format_tour_description_alex_style(tour)
-            await update.message.reply_text(tour_text, parse_mode='Markdown')
+            
+            # Создаем кнопки для этого тура
+            tour_id = str(tour.get('ID', '')).strip()
+            tour_buttons = [
+                [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_id_{tour_id}")],
+                [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
+                [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_id_{tour_id}")]
+            ]
+            
+            await update.message.reply_text(
+                tour_text, 
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(tour_buttons)
+            )
             await asyncio.sleep(0.3)
         
-        # СООБЩЕНИЕ 5: КНОПКИ ОТДЕЛЬНО
+        # СООБЩЕНИЕ 5: БЫСТРЫЙ ВЫБОР (все туры в виде кнопок для быстрой навигации)
         await update.message.reply_text(
-            "Выберите экскурсию:",
+            "📋 *Выберите из полного списка или* [посмотрите остальные](https://goldenkeytours.com):",
+            parse_mode='Markdown',
             reply_markup=make_tours_keyboard(tours_to_show, show_question_button=True)
         )
         
