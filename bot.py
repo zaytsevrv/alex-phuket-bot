@@ -1240,6 +1240,56 @@ def rank_tours_by_priorities(tours, user_data):
     return [tour for _, tour in scored_tours]
 
 # ==================== ФОРМАТИРОВАНИЕ ОПИСАНИЙ (НОВОЕ - в стиле Алекса) ====================
+
+def calculate_total_cost(tour, adults, children_ages):
+    """
+    Автоматически считает итоговую стоимость для группы.
+    Возвращает красиво отформатированную строку с расчетом.
+    """
+    try:
+        price_adult_str = str(tour.get('Цена Взр', '0')).replace('฿', '').strip()
+        price_child_str = str(tour.get('Цена Дет', '0')).replace('฿', '').strip()
+        
+        # Обработка диапазонов цен (например "2900 / 2700")
+        if '/' in price_adult_str:
+            price_adult = int(price_adult_str.split('/')[0].strip())
+        else:
+            price_adult = int(price_adult_str) if price_adult_str.isdigit() else 0
+        
+        if price_child_str and price_child_str != "⛔️" and price_child_str.lower() != "уточняйте":
+            if '/' in price_child_str:
+                price_child = int(price_child_str.split('/')[0].strip())
+            else:
+                price_child = int(price_child_str) if price_child_str.isdigit() else 0
+        else:
+            price_child = 0
+        
+        # Расчет для взрослых
+        adults_total = adults * price_adult
+        
+        # Расчет для детей
+        kids_total = 0
+        kids_count = 0
+        for age_months in children_ages:
+            if age_months >= 12:  # Дети старше 1 года платят
+                kids_count += 1
+                kids_total += price_child if price_child > 0 else price_adult
+        
+        total = adults_total + kids_total
+        
+        # Красивое форматирование
+        breakdown = f"\n💰 <b>ИТОГО для вашей группы: {total}฿</b>\n"
+        breakdown += f"• Взрослые: {adults} × {price_adult}฿ = {adults_total}฿\n"
+        
+        if kids_count > 0:
+            price_per_kid = price_child if price_child > 0 else price_adult
+            breakdown += f"• Дети: {kids_count} × {price_per_kid}฿ = {kids_total}฿\n"
+        
+        return breakdown
+    except Exception as e:
+        logging.error(f"Ошибка расчета стоимости: {e}")
+        return ""
+
 def format_tour_card_compact(tour, index=None):
     """
     Форматирует тур в компактную КАРТОЧКУ без излишеств.
@@ -1536,6 +1586,26 @@ def format_tour_description_alex_style(tour):
     
     return formatted
 
+def format_tour_with_cost_calculation(tour, user_data):
+    """
+    Форматирует описание экскурсии С РАСЧЕТОМ СТОИМОСТИ для конкретной группы.
+    Используется когда известны данные пользователя (взрослые, дети).
+    """
+    # Базовое описание
+    formatted = format_tour_description_alex_style(tour)
+    
+    # Добавляем расчет стоимости если есть данные о группе
+    if user_data and ('adults' in user_data or 'children' in user_data):
+        adults = user_data.get('adults', 0)
+        children_ages = user_data.get('children', [])
+        
+        if adults > 0 or len(children_ages) > 0:
+            cost_calc = calculate_total_cost(tour, adults, children_ages)
+            if cost_calc:
+                formatted += cost_calc
+    
+    return formatted
+
 def get_tour_additional_info(tour):
     """
     Возвращает дополнительную информацию об экскурсии
@@ -1817,14 +1887,19 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # ОБРАБОТКА КНОПКИ "НАШИ ОТЗЫВЫ НА GOOGLE"
     if user_choice == "⭐ Наши отзывы на Google":
+        # ИСПРАВЛЕНО: ссылка теперь через инлайн-кнопку, а не текст
+        keyboard_reviews = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⭐ Открыть отзывы на Google (4.9★)", url=GOOGLE_REVIEWS_URL)],
+            [InlineKeyboardButton("🔙 Вернуться к категориям", callback_data="back_to_categories")]
+        ])
+        
         await update.message.reply_text(
-            "⭐⭐⭐⭐⭐ *4.9 из 5* на Google Maps\n\n"
+            "⭐⭐⭐⭐⭐ <b>4.9 из 5</b> на Google Maps\n\n"
             "Более 500+ довольных туристов уже побывали на наших экскурсиях!\n\n"
-            "📖 Читайте честные отзывы реальных путешественников и убедитесь сами:\n"
-            f"👉 [Открыть отзывы на Google]({GOOGLE_REVIEWS_URL})\n\n"
+            "📖 Читайте честные отзывы реальных путешественников и убедитесь сами 👇\n\n"
             "💬 А после вашей экскурсии — будем рады вашему отзыву! 🙏",
-            parse_mode='Markdown',
-            reply_markup=make_category_keyboard()
+            parse_mode='HTML',
+            reply_markup=keyboard_reviews
         )
         return CATEGORY
     
@@ -1978,7 +2053,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             format_tours_group(tours_first_batch),
-            parse_mode='Markdown',
+            parse_mode='HTML',
             reply_markup=make_tours_keyboard(tours_to_show, show_question_button=True)
         )
         
@@ -2031,7 +2106,7 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await update.message.reply_text(
                 format_tours_group(top_3_sorted),
-                parse_mode='Markdown',
+                parse_mode='HTML',
                 reply_markup=make_tours_keyboard(top_3_sorted, show_question_button=True)
             )
             
@@ -3853,9 +3928,16 @@ def generate_deepseek_response(user_query, tour_data=None, context_info=None, us
 - Профессиональный, но дружелюбный
 - Честный и прямой ("Вот что нашел..." вместо "Я рекомендую...")
 - Уважение к выбору клиента (не уговаривай)
-- Легкий юмор только когда в тему
+- Легкий юмор только когда в тему (не перебарщивай!)
 - Максимум 100-120 слов
 - Раздели на 2-3 коротких абзаца
+
+ЭМОЦИОНАЛЬНЫЕ ОПИСАНИЯ:
+- Добавляй 1-2 яркие фразы на основе "Честного обзора" из прайса
+- Примеры: "захватывающие дух панорамы", "райский пляж как с открытки"
+- НО! Используй ТОЛЬКО факты из данных экскурсии, не выдумывай!
+- Если в обзоре написано "красивый вид" → можешь сказать "виды, от которых захватывает дух"
+- Если написано "хороший пляж" → "райский пляж с белоснежным песком"
 
 ФОРМУЛА ОТВЕТА на поиск экскурсий:
 1️⃣ Подтверди что нашел экскурсии ("По вашему запросу нашел X экскурсий...")
