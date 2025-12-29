@@ -85,34 +85,13 @@ def load_tours():
     tours = []
     try:
         with open(CSV_FILE, 'r', encoding='utf-8-sig') as f:  # utf-8-sig для обработки BOM
-            # --- ДОБАВЛЯЮ ОТЛАДКУ ПОЛЕЙ ---
-            sample = f.read(500)
-            print("🔍 Первые 500 символов CSV:")
-            print(sample)
-            print("\n" + "="*50 + "\n")
-            
-            f.seek(0)  # Возвращаемся в начало
             reader = csv.DictReader(f, delimiter=';')
-            
-            # Выводим названия полей для проверки
-            if reader.fieldnames:
-                print("📋 Обнаруженные поля в CSV:")
-                for i, field in enumerate(reader.fieldnames):
-                    print(f"   {i+1:2d}. '{field}'")
             
             for row in reader:
                 # Очищаем значения от лишних пробелов
                 clean_row = {key.strip(): (value.strip() if value else "") for key, value in row.items()}
                 tours.append(clean_row)
-                
-                # Выводим первую запись для проверки структуры
-                if len(tours) == 1:
-                    print("\n📝 Пример первой записи (первые 5 полей):")
-                    for i, (key, value) in enumerate(clean_row.items()):
-                        if i < 5 and value:
-                            print(f"   '{key}': '{value[:50]}...'")
             
-            print(f"\n✅ Загружено {len(tours)} экскурсий из CSV")
             return tours
     except Exception as e:
         print(f"❌ Ошибка загрузки CSV: {e}")
@@ -3633,20 +3612,6 @@ def check_tour_restrictions(tour, user_data):
         return response
     
     return None
-    """Проверяет, есть ли все необходимые данные для бронирования"""
-    missing = []
-    
-    if not user_data.get('hotel'):
-        missing.append("🏨 *Название отеля* (обязательно для транспорта)")
-    
-    if not user_data.get('phone'):
-        missing.append("📱 *Номер телефона*")
-    
-    # Дата не обязательна, но желательна
-    # if not user_data.get('booking_date'):
-    #     missing.append("📅 *Желаемая дата*")
-    
-    return "\n".join(f"• {item}" for item in missing)
 
 async def confirm_booking(query, context, tour, user_data):
     """Подтверждает бронирование и отправляет менеджеру"""
