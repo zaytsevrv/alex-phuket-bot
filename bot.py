@@ -2004,9 +2004,6 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QUALIFICATION
     
     # ВАРИАНТ 2: НЕ КАТЕГОРИЯ - СНАЧАЛА ИЩЕМ ЭКСКУРСИИ ПО КЛЮЧЕВЫМ СЛОВАМ (ГИБРИДНЫЙ ПОИСК)
-    # 🎉 ПОКАЗЫВАЕМ GIF ПОИСКА
-    await show_animation(update, 'search', '🔍 Ищу идеальные туры для вас...')
-    
     matching_tours, normalized_query = search_tours_by_keywords_hybrid(user_choice)
     
     if matching_tours:
@@ -2070,9 +2067,6 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ВАРИАНТ 3: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ОБЩИЙ ВОПРОС О РЕКОМЕНДАЦИЯХ?
     if is_general_recommendation_question(user_choice):
         # ✅ ОБЩИЙ ВОПРОС - ПОКАЗЫВАЕМ ТОП-3 ХИТА
-        # 🎉 ПОКАЗЫВАЕМ GIF АНАЛИЗА
-        await show_animation(update, 'analysis', '📊 Подбираю лучшие варианты для вас...')
-        
         # Получаем ТОП-3 хита по ID: 4, 20, 56
         top_3_hits = []
         for tour in TOURS:
@@ -2123,9 +2117,6 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ВАРИАНТ 4: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ВОПРОС?
     if is_likely_question(user_choice):
         # ✅ ЭТО ВОПРОС - ОТВЕЧАЕМ DEEPSEEK
-        # 🎉 ПОКАЗЫВАЕМ GIF "ДУМАЮ"
-        await show_animation(update, 'thinking', '👀 Интересный вопрос... Дайте подумать...')
-        
         deepseek_answer = generate_deepseek_response(
             user_query=user_choice,
             tour_data=None,
@@ -3551,9 +3542,6 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context_info += ", беременная"
 
         # Показываем typing indicator - бот "думает"
-        # 🎉 ПОКАЗЫВАЕМ GIF "ДУМАЮ"
-        await show_animation(update, 'thinking', '👀 Интересный вопрос... Дайте подумать...')
-
         # ИСПРАВЛЕНО: добавляем таймаут для DeepSeek, чтобы не зависнуть
         try:
             # Создаем таску с таймаутом (максимум 10 секунд на ответ)
