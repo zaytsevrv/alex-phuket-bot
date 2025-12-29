@@ -1818,7 +1818,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_action'] = 'start'
     # === КОНЕЦ АНАЛИТИКИ ===
 
-    welcome_text = f"""Приветствую, {user.first_name}! 🙏
+    welcome_text = f"""━━━━━━━━━━━━━━━━━
+Приветствую, {user.first_name}! 🙏
 
 Я Алекс, ваш личный гид по сокровищам Пхукета от GoldenKeyTours.
 
@@ -1849,7 +1850,8 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         
         # Спрашиваем о новой группе с нуля
-        welcome_text = """Хорошо, начнём с чистого листа! 📋
+        welcome_text = """━━━━━━━━━━━━━━━━━
+Хорошо, начнём с чистого листа! 📋
 
 Расскажите мне о вашей группе - кто едет? 👥
 
