@@ -2010,9 +2010,19 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # 📍 ФАЗА 1 ИСПРАВЛЕНИЕ: РАЗБИВАЕМ НА ОТДЕЛЬНЫЕ СООБЩЕНИЯ
         
-        # СООБЩЕНИЕ 1: DeepSeek комментарий ОТДЕЛЬНО
-        await update.message.reply_text(deepseek_comment, parse_mode='Markdown')
-        await asyncio.sleep(0.3)
+        # 🔨 ИСПРАВЛЕНИЕ #1 & #2: Убираем клавиатуру и добавляем эффект печатания
+        
+        # СООБЩЕНИЕ 1: DeepSeek комментарий ОТДЕЛЬНО (с эффектом печатания)
+        try:
+            await update.effective_chat.send_chat_action(ChatAction.TYPING)
+        except:
+            pass
+        await update.message.reply_text(
+            deepseek_comment, 
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()  # 🔨 УБИРАЕМ СТАРУЮ КЛАВИАТУРУ
+        )
+        await asyncio.sleep(0.8)  # 🔨 УВЕЛИЧЕННАЯ ПАУЗА (0.8 сек вместо 0.3)
         
         tours_to_show = categories_with_tours[first_category]
         
@@ -2033,6 +2043,12 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # СООБЩЕНИЯ 2-4: КАЖДЫЙ ТУР В ОТДЕЛЬНОМ СООБЩЕНИИ (только топ-3) С КНОПКАМИ
         tours_first_batch = tours_to_show[:3]
         for tour in tours_first_batch:
+            # 🔨 ЭФФЕКТ ПЕЧАТАНИЯ перед каждым туром
+            try:
+                await update.effective_chat.send_chat_action(ChatAction.TYPING)
+            except:
+                pass
+            
             tour_text = format_tour_description_alex_style(tour)
             
             # Создаем кнопки для этого тура
@@ -2048,11 +2064,15 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown',
                 reply_markup=InlineKeyboardMarkup(tour_buttons)
             )
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(1.0)  # 🔨 ЕЩЕ БОЛЬШЕ ПАУЗА (1 сек) чтобы успевал читать
         
         # СООБЩЕНИЕ 5: БЫСТРЫЙ ВЫБОР (все туры в виде кнопок для быстрой навигации)
+        try:
+            await update.effective_chat.send_chat_action(ChatAction.TYPING)
+        except:
+            pass
         await update.message.reply_text(
-            "📋 *Выберите из полного списка или* [посмотрите остальные](https://goldenkeytours.com):",
+            "📋 *Выберите экскурсию или посмотрите остальные варианты:*",
             parse_mode='Markdown',
             reply_markup=make_tours_keyboard(tours_to_show, show_question_button=True)
         )
