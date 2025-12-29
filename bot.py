@@ -57,6 +57,35 @@ if DEEPSEEK_API_KEY is None:
     DEEPSEEK_API_KEY = None
 
 # === КОНЕЦ БЛОКА БЕЗОПАСНОЙ ЗАГРУЗКИ ТОКЕНА ===
+
+# ==================== GIF АНИМАЦИИ ====================
+# GIF URLs из Giphy для визуального улучшения UX
+GIF_URLS = {
+    'search': 'https://media.giphy.com/media/l0HlQXlQ3nHyLMvte/giphy.gif',  # 🔍 Поиск туров
+    'thinking': 'https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif',  # 👀 Глаза (думаю)
+    'analysis': 'https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif',  # 📊 Анализ данных
+    'celebration': 'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif',  # 🎉 Конфетти
+    'calculator': 'https://media.giphy.com/media/xT0xeJpnrWC4XWblEk/giphy.gif',  # 🧮 Калькулятор
+}
+
+# Ссылка на Google отзывы компании
+GOOGLE_REVIEWS_URL = "https://www.google.com/maps/place/%D0%AD%D0%BA%D1%81%D0%BA%D1%83%D1%80%D1%81%D0%B8%D0%B8+%D0%BD%D0%B0+%D0%9F%D1%85%D1%83%D0%BA%D0%B5%D1%82%D0%B5+-+%D0%97%D0%BE%D0%BB%D0%BE%D1%82%D0%BE%D0%B9+%D0%9A%D0%BB%D1%8E%D1%87%D0%B8%D0%BA+-+Phuket+Best+Tours+and+Trips/@7.8760699,98.3936588,882m/data=!3m1!1e3!4m18!1m9!3m8!1s0xae2f0e7b4e2534a7:0x5070ab24a013289e!2z0K3QutGB0LrRg9GA0YHQuNC4INC90LAg0J_RhdGD0LrQtdGC0LUgLSDQl9C-0LvQvtGC0L7QuSDQmtC70Y7Rh9C40LogLSBQaHVrZXQgQmVzdCBUb3VycyBhbmQgVHJpcHM!8m2!3d7.8760699!4d98.3936588!9m1!1b1!16s%2Fg%2F11y1sbn1z3!3m7!1s0xae2f0e7b4e2534a7:0x5070ab24a013289e!8m2!3d7.8760699!4d98.3936588!9m1!1b1!16s%2Fg%2F11y1sbn1z3?authuser=0&entry=ttu&g_ep=EgoyMDI1MTIwOS4wIKXMDSoASAFQAw%3D%3D"
+
+async def show_animation(update, animation_type, caption=""):
+    """Показывает GIF анимацию для улучшения UX"""
+    try:
+        if animation_type in GIF_URLS:
+            await update.effective_chat.send_animation(
+                animation=GIF_URLS[animation_type],
+                caption=caption
+            )
+            await asyncio.sleep(1.5)  # Даем время посмотреть GIF
+    except Exception as e:
+        # Если GIF не загрузился, просто продолжаем без анимации
+        logging.warning(f"Не удалось загрузить GIF {animation_type}: {e}")
+        await update.effective_chat.send_chat_action(ChatAction.TYPING)
+        await asyncio.sleep(1)
+
 # ==================== БАЗА ДАННЫХ ====================
 DB_FILE = "bot_statistics.db"
 
@@ -262,6 +291,31 @@ def get_categories():
             categories.add(category)
     return sorted(list(categories))
 
+def is_general_recommendation_question(text):
+    """
+    Определяет, является ли текст общим вопросом о рекомендациях
+    (не привязан к конкретной категории или месту).
+    Возвращает True если это общий вопрос типа "Что посоветуете?", "С чего начать?".
+    """
+    text_lower = text.lower().strip()
+    
+    # Маркеры общих вопросов о рекомендациях
+    general_markers = [
+        'что посоветуете', 'что посоветуешь', 'что порекомендуете', 'что рекомендуете',
+        'с чего начать', 'куда пойти', 'куда съездить', 'что выбрать',
+        'что лучше', 'самое лучшее', 'самое интересное', 'самое популярное',
+        'топ экскурсий', 'лучшие экскурсии', 'популярные экскурсии',
+        'что стоит посмотреть', 'что обязательно', 'must see', 'мастсий',
+        'хиты', 'хит', 'главные достопримечательности'
+    ]
+    
+    # Проверяем наличие общих маркеров
+    for marker in general_markers:
+        if marker in text_lower:
+            return True
+    
+    return False
+
 def is_likely_question(text):
     """
     Определяет, является ли текст вопросом, а не попыткой выбрать категорию.
@@ -269,36 +323,36 @@ def is_likely_question(text):
     """
     text_lower = text.lower().strip()
     
-    # Признаки вопроса
+    # Признаки ВОПРОСА (высокий приоритет)
     question_markers = [
-        '?',  # Вопросительный знак
+        '?',  # Вопросительный знак - САМЫЙ ВЕРНЫЙ ПРИЗНАК
         'где', 'куда', 'что', 'как', 'почему', 'когда', 'какой', 'какая',
         'помог', 'совет', 'рекомендуешь', 'подскажи', 'расскажи',
-        'привет', 'привет!', 'привет,', 'привет)', 'привет :',
-        'привет)', 'привет!', 'привет,', 'привет)', 'привет :',
-        'хи', 'хей', 'эй', 'слушай', 'слушайте', 'давайте', 'давай',
+        'привет', 'хи', 'хей', 'эй', 'слушай', 'слушайте',
         'вы можете', 'ты можешь', 'можно', 'есть ли', 'есть',
         'какие', 'сколько', 'во сколько', 'по сколько', 'цена',
         'стоит', 'дорого', 'дешево', 'бюджет', 'деньги',
-        'симилан', 'пхи пхи', 'краби', 'пангнга', 'джамс бонд',
-        'вопрос', 'интересует', 'узнать', 'расскажи про', 'расскажите про'
+        'вопрос', 'интересует', 'узнать', 'расскажи про', 'расскажите про',
+        'интересует', 'пожалуйста', 'помощь', 'помогите', 'нужно',
+        'подойдет', 'подходит', 'возможно', 'способно', 'можете ли'
     ]
     
-    # Если содержит маркеры вопроса - это вопрос
+    # ПЕРВЫЙ ФИЛЬТР: вопросительный знак = вопрос (99% вероятность)
+    if '?' in text:
+        return True
+    
+    # ВТОРОЙ ФИЛЬТР: содержит маркеры вопроса
     for marker in question_markers:
         if marker in text_lower:
             return True
     
-    # Если более 5 слов - скорее всего вопрос или предложение, а не команда
-    words = text_lower.split()
-    if len(words) >= 5:
-        return True
-    
-    # Если много пробелов и слова не совпадают с категориями - вопрос
-    if ' ' in text_lower:
-        # Проверяем, начинается ли с маленькой буквы (признак естественной речи)
-        if text[0].islower() and len(text) > 15:
-            return True
+    # ТРЕТИЙ ФИЛЬТР: длинный текст (>30 символов) скорее вопрос, чем название экскурсии
+    if len(text.strip()) >= 25 and ' ' in text:
+        # Если в тексте есть предлоги - скорее всего это развернутый вопрос
+        prepositions = ['для', 'с', 'в', 'на', 'по', 'к', 'от', 'до', 'через', 'про', 'о']
+        for prep in prepositions:
+            if f' {prep} ' in f' {text_lower} ':
+                return True
     
     return False
 
@@ -606,14 +660,14 @@ def make_category_keyboard(show_all=False):
             row = remaining_cats[i:i+2]
             keyboard.append(row)
         
-        # Кнопка для сворачивания
-        keyboard.append(["🔽 Скрыть категории"])
+        # Кнопка для сворачивания и новый поиск
+        keyboard.append(["🔽 Скрыть категории", "🔄 Новый поиск"])
+        # Добавляем кнопку отзывов
+        keyboard.append(["⭐ Наши отзывы на Google"])
     elif remaining_cats:
-        # Показываем только кнопку "Показать ещё"
+        # Показываем кнопку "Показать ещё" и отзывы в одном ряду
         keyboard.append(["📂 Показать ещё категории"])
-    
-    # Добавляем кнопку "Новый поиск"
-    keyboard.append(["🔄 Новый поиск"])
+        keyboard.append(["⭐ Наши отзывы на Google"])
     
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -1241,9 +1295,9 @@ def format_tour_card_compact(tour, index=None):
     
     # Формируем карточку
     if is_hit:
-        card = f"🏆 {num_prefix}*{name}*\n"
+        card = f"🏆 {num_prefix}__*{name}*__\n"
     else:
-        card = f"{num_prefix}*{name}*\n"
+        card = f"{num_prefix}__*{name}*__\n"
     
     if desc_short:
         card += f"_{desc_short}_\n"
@@ -1336,9 +1390,9 @@ def format_tour_description_alex_style(tour):
     
     # 1. Заголовок с ХИТ и эмодзи (ТОЧНО как в промте)
     if is_hit:
-        formatted += f"**(ХИТ) {emoji} {display_name}**\n\n"
+        formatted += f"__**(ХИТ) {emoji} {display_name}**__\n\n"
     else:
-        formatted += f"{emoji} **{display_name}**\n\n"
+        formatted += f"{emoji} __**{display_name}**__\n\n"
     
     # 2. "Вкусная" фраза из описания витрины
     if vitrina_desc:
@@ -1354,7 +1408,36 @@ def format_tour_description_alex_style(tour):
         if first_sentence:
             formatted += f"_{first_sentence}_\n\n"
     
-    # 3. "✨ Почему это отлично?" (на основе тегов)
+    # 3. "🔒 Безопасность" - ЦВЕТНЫЕ ИНДИКАТОРЫ
+    if tags:
+        formatted += "**🔒 Безопасность**\n"
+        tag_text_lower = tags.lower()
+        
+        # Проверяем ограничения
+        if "#нельзя_беременным" in tag_text_lower:
+            formatted += "🔴 Нельзя беременным\n"
+        else:
+            formatted += "🟢 Безопасно для беременных\n"
+        
+        # Проверяем возраст детей
+        if "#дети_от_3_лет" in tag_text_lower:
+            formatted += "🟡 Дети от 3 лет\n"
+        elif "#дети_от_2_лет" in tag_text_lower:
+            formatted += "🟡 Дети от 2 лет\n"
+        elif "#дети_от_1_года" in tag_text_lower:
+            formatted += "🟡 Дети от 1 года\n"
+        else:
+            formatted += "🟢 Подходит для всех возрастов\n"
+        
+        # Проверяем здоровье
+        if "#проблемы_спины" in tag_text_lower or "#трясет" in tag_text_lower:
+            formatted += "🟡 Есть ограничения по здоровью\n"
+        else:
+            formatted += "🟢 Без особых ограничений\n"
+        
+        formatted += "\n"
+    
+    # 4. "✨ Почему это отлично?"
     if tags:
         formatted += "**✨ Почему это отлично?**\n"
         
@@ -1433,16 +1516,32 @@ def format_tour_description_alex_style(tour):
             formatted += f"**⚡️ Честно от местных:**\n"
             formatted += f"_{first_sentence}_\n\n"
     
-    # 5. "💰 Стоимость:" (точно как в CSV)
+    # 5. "💰 Стоимость:" - КРАСИВЫЙ БЛОК С РАЗДЕЛИТЕЛЕМ
     price_adult_clean = str(price_adult).strip()
     price_child_clean = str(price_child).strip() if price_child else ""
     
-    formatted += f"**💰 Стоимость:** **{price_adult_clean} бат** / взрослый"
+    # Определяем категорию цены и эмодзи
+    try:
+        price_value = int(price_adult_clean.replace('฿', '').replace(',', '').strip())
+        if price_value < 2000:
+            price_emoji = "💵"  # Бюджетный
+        elif price_value < 3000:
+            price_emoji = "💰"  # Стандарт
+        else:
+            price_emoji = "💎"  # Премиум
+    except:
+        price_emoji = "💰"  # По умолчанию
+    
+    formatted += f"**{price_emoji} Цена**\n"
+    formatted += "━━━━━━━━━━━\n"
+    formatted += f"  Взрослый: **{price_adult_clean}฿**\n"
     
     if price_child_clean and price_child_clean != "⛔️" and price_child_clean != "Уточняйте":
-        formatted += f", **{price_child_clean} бат** / ребенок\n"
+        formatted += f"  Детский:  **{price_child_clean}฿**\n"
     else:
-        formatted += "\n"
+        formatted += f"  Детский:  _Уточняйте_\n"
+    
+    formatted += "\n"
     
     # 6. Предоплата (точно как в CSV)
     prepayment_clean = str(prepayment).strip()
@@ -1543,9 +1642,9 @@ def make_tours_keyboard(tours, show_question_button=True, page=0, context=None):
             # Добавляем эмодзи для ХИТов
             display_name = f"🏆 {display_name}"
             
-            # Сохраняем исходный индекс для callback
-            tour_original_index = tours.index(tour)
-            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_{tour_original_index}")])
+            # Используем ID тура для callback вместо индекса
+            tour_id = tour.get('ID', '')
+            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_id_{tour_id}")])
         
         # Если есть ещё ХИТы - показываем кнопку следующих ХИТов
         if total_hits > 3:
@@ -1591,8 +1690,9 @@ def make_tours_keyboard(tours, show_question_button=True, page=0, context=None):
             if tour.get('', '').strip() == 'ХИТ':
                 display_name = f"🏆 {display_name}"
             
-            tour_original_index = tours.index(tour)
-            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_{tour_original_index}")])
+            # Используем ID тура для callback вместо индекса
+            tour_id = tour.get('ID', '')
+            keyboard.append([InlineKeyboardButton(f"{i+1}. {display_name}", callback_data=f"tour_id_{tour_id}")])
         
         # Кнопка "Вперед" если есть ещё туры
         hits_pages = (len(hit_tours) + 2) // 3
@@ -1601,9 +1701,12 @@ def make_tours_keyboard(tours, show_question_button=True, page=0, context=None):
         if page + 1 < total_pages:
             keyboard.append([InlineKeyboardButton("Следующие →", callback_data=f"show_more_tours_{page + 1}")])
     
-    # ⭐ ДОБАВИЛИ КНОПКУ "ЗАДАТЬ ВОПРОС"
+    # ⭐ ДОБАВИЛИ КНОПКУ "ЗАДАТЬ ВОПРОС" И ССЫЛКУ НА ОТЗЫВЫ
     if show_question_button:
         keyboard.append([InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")])
+    
+    # Добавляем ссылку на Google отзывы (открывается в браузере)
+    keyboard.append([InlineKeyboardButton("⭐ Наши отзывы на Google (4.9★)", url=GOOGLE_REVIEWS_URL)])
     
     keyboard.append([InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")])
     
@@ -1657,12 +1760,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Я Алекс, ваш личный гид по сокровищам Пхукета от GoldenKeyTours.
 
-Я помогу превратить ваши "хочу" в незабываемые впечатления. Подскажите, о чём мечтаете?
+Я помогу превратить ваши "хочу" в незабываемые впечатления. 
 
-💡 *Совет:* 
-• Нажмите на кнопку категории ниже
-• Или напишите, что вас интересует (например: "слонов" 🐘, "аватара", "рыбалку")
-• Можете задать вопрос о Пхукете"""
+🎯 *Выберите категорию экскурсий* — нажмите на кнопку ниже.
+
+Или напишите, что вас интересует (например: "Симиланы", "Аватар", "Пхи-Пхи", "Аквапарк")."""
     
     # Показываем typing indicator перед приветствием
     await update.effective_chat.send_chat_action(ChatAction.TYPING)
@@ -1721,6 +1823,19 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return CATEGORY
     
+    # ОБРАБОТКА КНОПКИ "НАШИ ОТЗЫВЫ НА GOOGLE"
+    if user_choice == "⭐ Наши отзывы на Google":
+        await update.message.reply_text(
+            "⭐⭐⭐⭐⭐ *4.9 из 5* на Google Maps\n\n"
+            "Более 500+ довольных туристов уже побывали на наших экскурсиях!\n\n"
+            "📖 Читайте честные отзывы реальных путешественников и убедитесь сами:\n"
+            f"👉 [Открыть отзывы на Google]({GOOGLE_REVIEWS_URL})\n\n"
+            "💬 А после вашей экскурсии — будем рады вашему отзыву! 🙏",
+            parse_mode='Markdown',
+            reply_markup=make_category_keyboard()
+        )
+        return CATEGORY
+    
     # === ВИЗУАЛЬНЫЙ ЭФФЕКТ - TYPING INDICATOR ===
     try:
         await update.effective_chat.send_chat_action(ChatAction.TYPING)
@@ -1752,15 +1867,20 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             has_young_children = any(age < 12 for age in children_ages)
             
             if (is_pregnant or has_young_children) and "Море" in user_choice:
-                response = "⚠️ *Внимание!*\n\n"
+                # Используем ЦИТАТУ для важного предупреждения
+                response = ""
                 
                 if is_pregnant:
-                    response += "🤰 *Беременным* = ❌ **ВСЕ** морские туры\n"
+                    response += "> ⚠️ *ВАЖНО ДЛЯ БЕРЕМЕННЫХ*\n"
+                    response += "> 🔴 Запрещены **ВСЕ** морские туры\n"
+                    response += "> Безопасность мамы и малыша - превыше всего!\n\n"
                 
                 if has_young_children:
-                    response += "👶 *Детям до года* = ❌ **ВСЕ** морские туры\n"
+                    response += "> ⚠️ *ВАЖНО ДЛЯ МАЛЫШЕЙ*\n"
+                    response += "> 🔴 Детям до года запрещены морские экскурсии\n"
+                    response += "> Волны и качка опасны для крошек!\n\n"
                 
-                response += "\n🎯 *Лучше выбрать:*\n"
+                response += "🎯 *Лучше выбрать:*\n"
                 response += "• 🏞️ *Суша (обзорные)* — Аватар, смотровые\n"
                 response += "• 🐘 *Суша (семейные)* — слоны, аквапарк\n"
                 response += "• 🎭 *Вечерние шоу* — Сиам Нирамит\n\n"
@@ -1815,6 +1935,9 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QUALIFICATION
     
     # ВАРИАНТ 2: НЕ КАТЕГОРИЯ - СНАЧАЛА ИЩЕМ ТУРЫ ПО КЛЮЧЕВЫМ СЛОВАМ (ГИБРИДНЫЙ ПОИСК)
+    # 🎉 ПОКАЗЫВАЕМ GIF ПОИСКА
+    await show_animation(update, 'search', '🔍 Ищу идеальные туры для вас...')
+    
     matching_tours, normalized_query = search_tours_by_keywords_hybrid(user_choice)
     
     if matching_tours:
@@ -1830,11 +1953,6 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         tour_examples = "\n".join([f"• {t.get('Название', 'Тур')}" for t in sample_tours])
         
-        # Показываем что мы нормализовали запрос если он изменился
-        query_note = ""
-        if normalized_query.lower() != user_choice.lower():
-            query_note = f"\n\n(Искал по: *{normalized_query}*)"
-        
         deepseek_comment = generate_deepseek_response(
             user_query=f"Пользователь спросил про: {user_choice}. Я нашел {len(matching_tours)} туров по этому запросу. "
                        f"Вот примеры: {tour_examples}",
@@ -1843,20 +1961,33 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_name=user.first_name
         )
         
-        deepseek_comment = format_deepseek_answer(deepseek_comment) + query_note
+        deepseek_comment = format_deepseek_answer(deepseek_comment)
         
         await update.message.reply_text(deepseek_comment, parse_mode='Markdown')
         
         tours_to_show = categories_with_tours[first_category]
         
+        # РАНЖИРУЕМ ТУРЫ: сначала хиты, потом остальные
+        # Если есть user_data, используем rank_tours_by_hits_and_priorities
+        if 'user_data' in context.user_data:
+            tours_to_show = rank_tours_by_hits_and_priorities(tours_to_show, context.user_data['user_data'])
+        else:
+            # Если нет данных пользователя, просто разделяем на хиты и не хиты
+            hit_tours = [t for t in tours_to_show if t.get('', '').strip() == 'ХИТ']
+            non_hit_tours = [t for t in tours_to_show if t.get('', '').strip() != 'ХИТ']
+            tours_to_show = hit_tours + non_hit_tours
+        
         context.user_data['selected_category'] = first_category
         context.user_data['ranked_tours'] = tours_to_show
         context.user_data['tour_offset'] = 0
         
+        # Показываем только первые 3 хита (или все туры если меньше 3)
+        tours_first_batch = tours_to_show[:3]
+        
         await update.message.reply_text(
-            format_tours_group(tours_to_show[:5]),
+            format_tours_group(tours_first_batch),
             parse_mode='Markdown',
-            reply_markup=make_tours_keyboard(tours_to_show)
+            reply_markup=make_tours_keyboard(tours_to_show, show_question_button=True)
         )
         
         # === АНАЛИТИКА ===
@@ -1867,11 +1998,64 @@ async def handle_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         return TOUR_DETAILS
     
-    # ВАРИАНТ 3: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ВОПРОС?
+    # ВАРИАНТ 3: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ОБЩИЙ ВОПРОС О РЕКОМЕНДАЦИЯХ?
+    if is_general_recommendation_question(user_choice):
+        # ✅ ОБЩИЙ ВОПРОС - ПОКАЗЫВАЕМ ТОП-3 ХИТА
+        # 🎉 ПОКАЗЫВАЕМ GIF АНАЛИЗА
+        await show_animation(update, 'analysis', '📊 Подбираю лучшие варианты для вас...')
+        
+        # Получаем ТОП-3 хита по ID: 4, 20, 56
+        top_3_hits = []
+        for tour in TOURS:
+            tour_id = str(tour.get('ID', '')).strip()
+            if tour_id in ['4', '20', '56']:
+                top_3_hits.append(tour)
+        
+        # Сортируем в нужном порядке: 4, 20, 56
+        top_3_sorted = []
+        for tid in ['4', '20', '56']:
+            for tour in top_3_hits:
+                if str(tour.get('ID', '')).strip() == tid:
+                    top_3_sorted.append(tour)
+                    break
+        
+        if top_3_sorted:
+            deepseek_answer = generate_deepseek_response(
+                user_query=user_choice,
+                tour_data=None,
+                context_info=f"Пользователь спросил общий вопрос о рекомендациях. Показываю ТОП-3 самые популярные экскурсии: {', '.join([t.get('Название', '') for t in top_3_sorted])}",
+                user_name=user.first_name
+            )
+            
+            deepseek_answer = format_deepseek_answer(deepseek_answer)
+            
+            await update.message.reply_text(deepseek_answer, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
+            
+            # Сохраняем ТОП-3 для показа
+            context.user_data['selected_category'] = "ТОП-3 хита"
+            context.user_data['ranked_tours'] = top_3_sorted
+            context.user_data['tour_offset'] = 0
+            context.user_data['showing_top_hits'] = True  # Флаг что показываем топ-хиты
+            
+            await update.message.reply_text(
+                format_tours_group(top_3_sorted),
+                parse_mode='Markdown',
+                reply_markup=make_tours_keyboard(top_3_sorted, show_question_button=True)
+            )
+            
+            # === АНАЛИТИКА ===
+            track_user_session(context, BOT_STAGES['category_selection'], {'query': user_choice, 'showed_top_hits': True})
+            logger.log_action(user.id, "showed_top_3_hits", stage=BOT_STAGES['category_selection'], query=user_choice)
+            context.user_data['last_action'] = 'top_hits_shown'
+            # === КОНЕЦ АНАЛИТИКИ ===
+            
+            return TOUR_DETAILS
+    
+    # ВАРИАНТ 4: ТУРЫ НЕ НАЙДЕНЫ - ПРОВЕРЯЕМ, ЭТО ВОПРОС?
     if is_likely_question(user_choice):
         # ✅ ЭТО ВОПРОС - ОТВЕЧАЕМ DEEPSEEK
-        await update.effective_chat.send_chat_action(ChatAction.TYPING)
-        await asyncio.sleep(1)
+        # 🎉 ПОКАЗЫВАЕМ GIF "ДУМАЮ"
+        await show_animation(update, 'thinking', '👀 Интересный вопрос... Дайте подумать...')
         
         deepseek_answer = generate_deepseek_response(
             user_query=user_choice,
@@ -2300,6 +2484,8 @@ async def handle_confirmation_choice(update: Update, context: ContextTypes.DEFAU
         return await proceed_to_tours(update, context, user_data)
 
     return CONFIRMATION
+
+async def handle_clarification_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик уточняющих ответов пользователя"""
     user_text = update.message.text
 
@@ -2356,12 +2542,8 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_text in ["✅ Да, всё верно", "✏️ Нет, исправить", "🔄 Подобрать из рекомендованных", "🔄 Выбрать другую категорию", "✏️ Изменить параметры", "📋 Показать все", "✏️ Уточнить параметры", "📋 Только ознакомиться с морскими"]:
         return await handle_confirmation_choice(update, context)
     else:
-        # Если пользователь ответил что-то непонятное - просим выбрать из кнопок
-        await update.message.reply_text(
-            "🤔 Не совсем понял ваш ответ. Пожалуйста, выберите один из вариантов выше.",
-            reply_markup=make_confirmation_keyboard()
-        )
-        return CONFIRMATION
+        # Иначе - обработка уточняющих ответов (если есть next_question)
+        return await handle_clarification_response(update, context)
 
 async def proceed_to_tours(update: Update, context: ContextTypes.DEFAULT_TYPE, user_data):
     """Переход к показу экскурсий после подтверждения всех данных"""
@@ -2470,7 +2652,40 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['last_action'] = 'tour_view'
     # === КОНЕЦ АНАЛИТИКИ ===
     
-    if callback_data.startswith("tour_"):
+    # Обрабатываем выбор экскурсии - новый формат с ID
+    if callback_data.startswith("tour_id_"):
+        # Новый формат: tour_id_{ID}
+        try:
+            tour_id = callback_data.split("tour_id_")[1]
+            
+            # Ищем тур по ID в ranked_tours или во всех TOURS
+            ranked_tours = context.user_data.get('ranked_tours', [])
+            tour = None
+            
+            # Сначала ищем в ranked_tours
+            for t in ranked_tours:
+                if str(t.get('ID', '')).strip() == tour_id:
+                    tour = t
+                    break
+            
+            # Если не нашли, ищем во всех турах
+            if not tour:
+                for t in TOURS:
+                    if str(t.get('ID', '')).strip() == tour_id:
+                        tour = t
+                        break
+            
+            if not tour:
+                await query.answer("❌ Экскурсия не найдена", show_alert=True)
+                return TOUR_DETAILS
+                
+        except (IndexError, ValueError) as e:
+            print(f"Ошибка парсинга tour_id из callback: {e}")
+            await query.answer("❌ Ошибка обработки", show_alert=True)
+            return TOUR_DETAILS
+    
+    elif callback_data.startswith("tour_"):
+        # Старый формат: tour_{index} (для обратной совместимости)
         # Пользователь выбрал конкретную экскурсию
         try:
             tour_index = int(callback_data.split("_")[1])
@@ -2483,21 +2698,26 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         # Защита: если ranked_tours пуста или индекс неправильный
         if not ranked_tours or tour_index >= len(ranked_tours):
             await query.answer("❌ Экскурсия не найдена. Пожалуйста, выберите снова.", show_alert=True)
-            return
+            return TOUR_DETAILS
         
         tour = ranked_tours[tour_index]
-        
+    
+    # Общая обработка для обоих форматов - показываем описание тура
+    if 'tour' in locals() and tour:
         # ДОБАВЛЯЕМ ПОДСКАЗКУ ПЕРЕД ОПИСАНИЕМ
         tip_text = f"💡 *Совет:* Если у вас есть вопросы по экскурсии, просто спросите!\n\n"
         
         # ИСПОЛЬЗУЕМ НОВОЕ ФОРМАТИРОВАНИЕ В СТИЛЕ АЛЕКСА
         description = tip_text + format_tour_description_alex_style(tour)
         
+        # Получаем ID тура для кнопок
+        tour_id = str(tour.get('ID', '')).strip()
+        
         # Создаем кнопки для навигации
         keyboard = [
-            [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_{tour_index}")],
+            [InlineKeyboardButton("📋 Дополнительная информация", callback_data=f"more_info_id_{tour_id}")],
             [InlineKeyboardButton("🤔 Задать вопрос", callback_data="ask_question")],
-            [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_{tour_index}")],
+            [InlineKeyboardButton("💳 Забронировать", callback_data=f"book_id_{tour_id}")],
             [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")],
             [InlineKeyboardButton("🔄 Выбрать другую категорию", callback_data="change_category")]
         ]
@@ -2509,7 +2729,40 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
             disable_web_page_preview=False
         )
     
+    elif callback_data.startswith("more_info_id_"):
+        # Новый формат: more_info_id_{ID}
+        tour_id = callback_data.split("more_info_id_")[1]
+        
+        # Ищем тур по ID
+        ranked_tours = context.user_data.get('ranked_tours', [])
+        tour = None
+        for t in ranked_tours:
+            if str(t.get('ID', '')).strip() == tour_id:
+                tour = t
+                break
+        if not tour:
+            for t in TOURS:
+                if str(t.get('ID', '')).strip() == tour_id:
+                    tour = t
+                    break
+        
+        if tour:
+            additional_info = get_tour_additional_info(tour)
+            
+            # Кнопки для возврата
+            keyboard = [
+                [InlineKeyboardButton("← Назад к описанию", callback_data=f"tour_id_{tour_id}")],
+                [InlineKeyboardButton("← К списку экскурсий", callback_data="back_to_list_0")]
+            ]
+            
+            await query.edit_message_text(
+                text=additional_info,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    
     elif callback_data.startswith("more_info_"):
+        # Старый формат: more_info_{index}
         # Пользователь хочет дополнительную информацию
         tour_index = int(callback_data.split("_")[2])
         ranked_tours = context.user_data.get('ranked_tours', [])
@@ -2589,7 +2842,80 @@ async def handle_tour_selection(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return QUESTION
     
+    elif callback_data.startswith("book_id_"):
+        # Новый формат: book_id_{ID}
+        tour_id = callback_data.split("book_id_")[1]
+        
+        # Ищем тур по ID
+        ranked_tours = context.user_data.get('ranked_tours', [])
+        tour = None
+        for t in ranked_tours:
+            if str(t.get('ID', '')).strip() == tour_id:
+                tour = t
+                break
+        if not tour:
+            for t in TOURS:
+                if str(t.get('ID', '')).strip() == tour_id:
+                    tour = t
+                    break
+        
+        if tour:
+            user_data = context.user_data.get('user_data', {})
+            
+            # Проверяем соответствие ограничений
+            restriction_check = check_tour_restrictions(tour, user_data)
+            if restriction_check:
+                # Есть ограничения - показываем сообщение и предлагаем альтернативы
+                await query.message.reply_text(
+                    restriction_check,
+                    parse_mode='Markdown',
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                
+                # Показываем доступные категории
+                await query.message.reply_text(
+                    "🎯 *Выберите доступную категорию:*",
+                    parse_mode='Markdown',
+                    reply_markup=make_category_keyboard()
+                )
+                return CATEGORY
+            else:
+                # Ограничений нет - переходим к бронированию
+                context.user_data['booking_tour'] = tour
+                
+                # Проверяем, есть ли данные о группе
+                missing = check_booking_requirements(user_data)
+                
+                if missing:
+                    await query.message.reply_text(
+                        f"✅ *Отлично! Осталось уточнить несколько деталей для бронирования:*\n\n{missing}\n\n"
+                        "Пожалуйста, укажите:",
+                        parse_mode='Markdown',
+                        reply_markup=ReplyKeyboardRemove()
+                    )
+                    return BOOKING
+                else:
+                    # Все данные есть - спрашиваем про отель
+                    if not user_data.get('hotel'):
+                        await query.message.reply_text(
+                            "🏨 *Напишите название вашего отеля*\n\n"
+                            "Это поможет менеджеру организовать трансфер и согласовать детали.\n\n"
+                            "💡 *Подсказка:* Можете воспользоваться одной из популярных кнопок ниже или напишите название своего отеля. Если не знаете название точно, расскажите район (Патонг, Фук Ет, Карон и т.д.)",
+                            parse_mode='Markdown',
+                            reply_markup=ReplyKeyboardMarkup([
+                                ["🏨 Patong Beach", "🏨 Kata Beach"],
+                                ["🏨 Karon Beach", "🏨 Phuket Town"],
+                                ["➡️ Пропустить указание отеля"]
+                            ], resize_keyboard=True)
+                        )
+                        return BOOKING_HOTEL
+                    else:
+                        # Все есть - подтверждаем бронирование
+                        await confirm_booking(query, context, tour, user_data)
+                        return ConversationHandler.END
+    
     elif callback_data.startswith("book_"):
+        # Старый формат: book_{index}
         # Пользователь хочет забронировать экскурсию
         tour_index = int(callback_data.split("_")[1])
         ranked_tours = context.user_data.get('ranked_tours', [])
@@ -3156,8 +3482,8 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context_info += ", беременная"
 
         # Показываем typing indicator - бот "думает"
-        await update.effective_chat.send_chat_action(ChatAction.TYPING)
-        await asyncio.sleep(1.5)  # Даем время на "размышление"
+        # 🎉 ПОКАЗЫВАЕМ GIF "ДУМАЮ"
+        await show_animation(update, 'thinking', '👀 Интересный вопрос... Дайте подумать...')
 
         # ИСПРАВЛЕНО: добавляем таймаут для DeepSeek, чтобы не зависнуть
         try:
@@ -3298,7 +3624,7 @@ async def confirm_booking(query, context, tour, user_data):
             "Попробуйте позже или свяжитесь с менеджером напрямую.",
             parse_mode='Markdown'
         )
-        print(f"Ошибка отправки бронирования: {e}")
+        print(f"❌ Ошибка отправки бронирования менеджеру (ADMIN_ID={ADMIN_ID}): {type(e).__name__}: {e}")
 
 def format_booking_summary(user, tour, user_data):
     """Форматирует сводку бронирования для менеджера"""
@@ -3392,15 +3718,14 @@ async def handle_booking_input(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             # Отель не указан - спрашиваем опционально
             await update.message.reply_text(
-                "🏨 *Хотите указать название отеля?*\n\n"
-                "Это поможет менеджеру организовать трансфер.\n\n"
-                "📝 *Варианты ответа:*\n"
-                "• Укажите название отеля\n"
-                "• Напишите 'нет' или 'пропустить'\n"
-                "• Или просто нажмите 'Продолжить без отеля'",
+                "🏨 *Напишите название вашего отеля*\n\n"
+                "Это поможет менеджеру организовать трансфер и согласовать детали.\n\n"
+                "💡 *Подсказка:* Можете воспользоваться одной из популярных кнопок ниже или напишите название своего отеля. Если не знаете название точно, расскажите район (Патонг, Фук Ет, Карон и т.д.)",
                 parse_mode='Markdown',
                 reply_markup=ReplyKeyboardMarkup([
-                    ["🏨 Указать отель", "➡️ Продолжить без отеля"]
+                    ["🏨 Patong Beach", "🏨 Kata Beach"],
+                    ["🏨 Karon Beach", "🏨 Phuket Town"],
+                    ["➡️ Пропустить указание отеля"]
                 ], resize_keyboard=True)
             )
             return BOOKING_HOTEL
@@ -3419,33 +3744,38 @@ async def handle_booking_hotel_input(update: Update, context: ContextTypes.DEFAU
     # === КОНЕЦ АНАЛИТИКИ ===
     
     # Проверяем ответ пользователя
-    skip_keywords = ['нет', 'пропустить', 'продолжить без отеля', '➡️ продолжить без отеля']
+    skip_keywords = ['нет', 'пропустить', 'продолжить без отеля', '➡️ пропустить указание отеля']
     
-    if user_text.lower() in skip_keywords or user_text == "➡️ Продолжить без отеля":
+    if user_text.lower() in skip_keywords or user_text == "➡️ Пропустить указание отеля":
         # Пользователь не хочет указывать отель
         await update.message.reply_text(
             "✅ *Понятно, продолжаем без указания отеля.*\n\n"
             "Менеджер свяжется для уточнения деталей трансфера.",
-            parse_mode='Markdown'
-        )
-    elif user_text == "🏨 Указать отель":
-        # Просим ввести отель
-        await update.message.reply_text(
-            "🏨 *Укажите название вашего отеля:*\n\n"
-            "Например: Patong Beach Hotel или просто 'Patong Beach'",
             parse_mode='Markdown',
             reply_markup=ReplyKeyboardRemove()
         )
-        return BOOKING_HOTEL
+    elif user_text in ["🏨 Patong Beach", "🏨 Kata Beach", "🏨 Karon Beach", "🏨 Phuket Town"]:
+        # Пользователь выбрал один из предложенных отелей
+        hotel_name = user_text.replace("🏨 ", "").strip()
+        user_data['hotel'] = hotel_name
+        context.user_data['user_data'] = user_data
+        
+        await update.message.reply_text(
+            f"✅ *Отель сохранен:* {hotel_name}\n\n"
+            "Спасибо! Теперь всё готово для подтверждения бронирования.",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
     else:
-        # Пользователь ввел название отеля
+        # Пользователь ввел название отеля вручную
         user_data['hotel'] = user_text.title()
         context.user_data['user_data'] = user_data
         
         await update.message.reply_text(
             f"✅ *Отель сохранен:* {user_data['hotel']}\n\n"
-            "Теперь все данные готовы для бронирования.",
-            parse_mode='Markdown'
+            "Спасибо! Теперь всё готово для подтверждения бронирования.",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
         )
     
     # Подтверждаем бронирование
@@ -3656,7 +3986,7 @@ async def confirm_booking_via_message(update, context, tour, user_data):
             "Попробуйте позже или свяжитесь с менеджером напрямую.",
             parse_mode='Markdown'
         )
-        print(f"Ошибка отправки бронирования: {e}")
+        print(f"❌ Ошибка отправки бронирования менеджеру (ADMIN_ID={ADMIN_ID}): {type(e).__name__}: {e}")
 
 # ==================== ЗАПУСК БОТА ====================
 def main():
